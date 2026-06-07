@@ -12,14 +12,19 @@ export type CommandContext = {
   home?: string;
 };
 
+export type WorkspaceKind = "directory" | "named";
+
 export type WorkspaceState = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   workspace: string;
   workspaceSlug: string;
+  workspaceKind: WorkspaceKind;
+  workspaceRoot: string;
   createdAt: string;
   updatedAt: string;
   root: string;
   nextEventId: number;
+  leaderAgent?: string;
   agents: Record<string, AgentState>;
   warnings: WorkspaceWarning[];
 };
@@ -37,6 +42,11 @@ export type AgentState = {
   lastPollAt?: string;
   lastPollEmptyCount?: number;
   lastPollCommand?: string;
+  fingerprintHash?: string;
+  fingerprintSource?: string;
+  autoNamed?: boolean;
+  joinOrder: number;
+  leadership: "leader" | "follower";
 };
 
 export type WorkspaceWarning = {
@@ -48,7 +58,9 @@ export type WorkspaceWarning = {
 export type EventType =
   | "workspace.created"
   | "agent.joined"
+  | "agent.reidentified"
   | "agent.left"
+  | "leader.assigned"
   | "message.posted"
   | "work.done"
   | "warning.created";
@@ -72,6 +84,9 @@ export type CodeworkPaths = {
   home: string;
   workspace?: string;
   workspaceSlug?: string;
+  workspaceKind?: WorkspaceKind;
+  workspaceRoot?: string;
+  workspaceHash?: string;
   workspaceDir?: string;
 };
 

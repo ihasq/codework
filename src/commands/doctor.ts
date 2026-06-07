@@ -8,19 +8,16 @@ import { resolveCodeworkPaths } from "../core/paths.ts";
 import { renderDoctor } from "../core/render.ts";
 import { loadState } from "../core/state.ts";
 import type { CommandContext, CommandResult } from "../core/types.ts";
-import { slugifyIdentifier } from "../core/validate.ts";
-
 type RuntimeGlobal = typeof globalThis & {
   Deno?: { version?: { deno?: string } };
   Bun?: { version?: string };
 };
 
 export async function runDoctorCommand(ctx: CommandContext): Promise<CommandResult> {
-  const workspace = ctx.workspace ? slugifyIdentifier(ctx.workspace, "--workspace") : undefined;
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace?.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   const homeExisted = await exists(paths.home);
@@ -45,7 +42,7 @@ export async function runDoctorCommand(ctx: CommandContext): Promise<CommandResu
   if (paths.workspaceDir) {
     const state = await loadState(paths.workspaceDir);
     if (!state) {
-      checks.push(`warn: workspace state not found for ${workspace?.value}`);
+      checks.push(`warn: workspace state not found for ${paths.workspace ?? "(directory default)"}`);
     } else {
       checks.push(`ok: state.json schemaVersion=${state.schemaVersion}`);
       const events = await readEvents(paths.workspaceDir);
@@ -63,14 +60,12 @@ export async function runDoctorCommand(ctx: CommandContext): Promise<CommandResu
 
   return {
     text: renderDoctor({
-      workspace: workspace?.value,
+      workspace: paths.workspace,
       root: paths.root,
       home: paths.home,
       runtime: runtimeName(),
       checks,
-      nextCommand: workspace
-        ? `codework status --workspace=${workspace.value}`
-        : "codework new --workspace=<id> --name=<agent> --follow=<user|self|agent>"
+      nextCommand: ctx.workspace ? `codework status --workspace=${ctx.workspace}` : "codework"
     }),
     quietText: "doctor=ok\n",
     json: {
@@ -79,7 +74,7 @@ export async function runDoctorCommand(ctx: CommandContext): Promise<CommandResu
       runtime: runtimeName(),
       root: paths.root,
       home: paths.home,
-      workspace: workspace?.value,
+      workspace: paths.workspace,
       checks
     }
   };

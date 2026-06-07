@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { Command, CommanderError } from "commander";
-import { realpathSync } from "fs";
-import process6 from "process";
+import { realpathSync as realpathSync2 } from "fs";
+import process8 from "process";
 import { fileURLToPath } from "url";
 
 // src/args.ts
@@ -34,13 +34,36 @@ import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import path from "path";
 import process2 from "process";
 
+// src/core/migrate.ts
+function migrateWorkspaceState(raw) {
+  const state = raw;
+  const agents = Object.values(state.agents ?? {});
+  const sortedAgents = [...agents].sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
+  const leader = state.leaderAgent ?? sortedAgents.find((agent) => agent.follow === "user")?.name ?? sortedAgents[0]?.name;
+  sortedAgents.forEach((agent, index) => {
+    agent.joinOrder = agent.joinOrder ?? index + 1;
+    agent.leadership = agent.leadership ?? (agent.name === leader ? "leader" : "follower");
+  });
+  return {
+    ...state,
+    schemaVersion: 2,
+    workspaceKind: state.workspaceKind ?? "named",
+    workspaceRoot: state.workspaceRoot ?? state.root,
+    leaderAgent: leader,
+    agents: state.agents,
+    warnings: state.warnings ?? []
+  };
+}
+
 // src/core/validate.ts
 var CodeworkError = class extends Error {
   exitCode;
-  constructor(exitCode, message) {
+  stdout;
+  constructor(exitCode, message, stdout) {
     super(message);
     this.name = "CodeworkError";
     this.exitCode = exitCode;
+    this.stdout = stdout;
   }
 };
 function required(value, optionName) {
@@ -150,7 +173,7 @@ async function writeTextAtomic(filePath, value) {
 async function loadState(workspaceDir) {
   try {
     const raw = await readFile(stateFilePath(workspaceDir), "utf8");
-    return JSON.parse(raw);
+    return migrateWorkspaceState(JSON.parse(raw));
   } catch (error) {
     const code = error.code;
     if (code === "ENOENT") {
@@ -190,9 +213,11 @@ function createWorkspaceState(paths, workspace) {
   }
   const ts = nowIso();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     workspace,
     workspaceSlug: paths.workspaceSlug,
+    workspaceKind: paths.workspaceKind ?? "named",
+    workspaceRoot: paths.workspaceRoot ?? paths.root,
     createdAt: ts,
     updatedAt: ts,
     root: paths.root,
@@ -211,6 +236,10 @@ function addOrRejoinAgent(state, input) {
     existing.lastSeenAt = ts;
     existing.active = true;
     existing.sessionCount += 1;
+    existing.fingerprintHash = input.fingerprintHash ?? existing.fingerprintHash;
+    existing.fingerprintSource = input.fingerprintSource ?? existing.fingerprintSource;
+    existing.autoNamed = input.autoNamed ?? existing.autoNamed;
+    existing.leadership = input.leadership ?? existing.leadership;
     if (input.cursorEventId !== void 0) {
       existing.cursorEventId = input.cursorEventId;
     }
@@ -226,11 +255,19 @@ function addOrRejoinAgent(state, input) {
     lastSeenAt: ts,
     active: true,
     sessionCount: 1,
-    cursorEventId: input.cursorEventId ?? 0
+    cursorEventId: input.cursorEventId ?? 0,
+    fingerprintHash: input.fingerprintHash,
+    fingerprintSource: input.fingerprintSource,
+    autoNamed: input.autoNamed,
+    joinOrder: nextJoinOrder(state),
+    leadership: input.leadership ?? "follower"
   };
   state.agents[agent.slug] = agent;
   state.updatedAt = ts;
   return { agent, rejoin: false };
+}
+function nextJoinOrder(state) {
+  return Math.max(0, ...Object.values(state.agents).map((agent) => agent.joinOrder ?? 0)) + 1;
 }
 function findAgent(state, name) {
   if (!name) {
@@ -467,9 +504,58 @@ function safeHostname() {
   }
 }
 
-// src/core/paths.ts
+// src/core/workspace.ts
 import { execFileSync } from "child_process";
+import crypto from "crypto";
+import { mkdirSync, realpathSync } from "fs";
+import os2 from "os";
 import path3 from "path";
+function resolveWorkspace(input) {
+  const cwd = path3.resolve(input.cwd || process.cwd());
+  const workspaceArg = input.workspace?.trim();
+  if (workspaceArg && looksLikePathWorkspace(workspaceArg)) {
+    const workspaceRoot = canonicalizePath(expandHome(workspaceArg), input.createPathWorkspaceRoot ?? true);
+    return directoryWorkspace(cwd, workspaceRoot, input.home);
+  }
+  if (workspaceArg) {
+    const root2 = findRepositoryRoot(cwd, input.debug);
+    const workspace = slugifyIdentifier(workspaceArg, "--workspace");
+    const home = input.home ? path3.resolve(cwd, input.home) : path3.join(root2, ".codework");
+    return {
+      cwd,
+      root: root2,
+      home,
+      workspace: workspace.value,
+      workspaceSlug: workspace.slug,
+      workspaceKind: "named",
+      workspaceRoot: root2,
+      workspaceDir: path3.join(home, "workspaces", workspace.slug)
+    };
+  }
+  const root = findRepositoryRoot(cwd, input.debug);
+  return directoryWorkspace(cwd, canonicalizePath(root, false), input.home);
+}
+function looksLikePathWorkspace(value) {
+  return value.startsWith("/") || value.startsWith("./") || value.startsWith("../") || value.startsWith("~");
+}
+function directoryWorkspace(cwd, workspaceRoot, homeOverride) {
+  const displayName = path3.basename(workspaceRoot) || "workspace";
+  const hash = crypto.createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 8);
+  const slugBase = displayName.replace(/[^a-zA-Z0-9._-]/g, "-") || "workspace";
+  const workspaceSlug = `${slugBase}-${hash}`;
+  const home = homeOverride ? path3.resolve(cwd, homeOverride) : path3.join(workspaceRoot, ".codework");
+  return {
+    cwd,
+    root: workspaceRoot,
+    home,
+    workspace: displayName,
+    workspaceSlug,
+    workspaceKind: "directory",
+    workspaceRoot,
+    workspaceHash: hash,
+    workspaceDir: path3.join(home, "workspaces", workspaceSlug)
+  };
+}
 function findRepositoryRoot(cwd, debug = false) {
   try {
     const stdout = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -483,23 +569,30 @@ function findRepositoryRoot(cwd, debug = false) {
     return cwd;
   }
 }
-function resolveCodeworkPaths(options) {
-  const cwd = path3.resolve(options.cwd || process.cwd());
-  const root = findRepositoryRoot(cwd, options.debug);
-  const home = options.home ? path3.resolve(cwd, options.home) : path3.join(root, ".codework");
-  if (!options.workspace) {
-    return { cwd, root, home };
+function expandHome(value) {
+  if (value === "~") {
+    return os2.homedir();
   }
-  const workspace = slugifyIdentifier(options.workspace, "--workspace");
-  const workspaceDir = path3.join(home, "workspaces", workspace.slug);
-  return {
-    cwd,
-    root,
-    home,
-    workspace: workspace.value,
-    workspaceSlug: workspace.slug,
-    workspaceDir
-  };
+  if (value.startsWith("~/")) {
+    return path3.join(os2.homedir(), value.slice(2));
+  }
+  return value;
+}
+function canonicalizePath(value, create) {
+  const resolved = path3.resolve(value);
+  if (create) {
+    mkdirSync(resolved, { recursive: true });
+  }
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+// src/core/paths.ts
+function resolveCodeworkPaths(options) {
+  return resolveWorkspace(options);
 }
 
 // src/core/command.ts
@@ -718,6 +811,32 @@ function renderPollResult(options) {
   return `${lines.join("\n")}
 `;
 }
+function renderAutoEnter(options) {
+  const role = options.agent.leadership === "leader" ? "leader" : "follower engineer";
+  const lines = [
+    "# CODEWORK AUTO-ENTER",
+    "",
+    `WORKSPACE: ${options.state.workspace}`,
+    `WORKSPACE MODE: ${options.state.workspaceKind === "directory" ? "directory-default" : "named"}`,
+    `WORKSPACE ROOT: ${options.state.workspaceRoot}`,
+    `AGENT: ${options.agent.name}`,
+    `ROLE: ${role}`,
+    `FOLLOW: ${options.agent.follow}`,
+    `AUTHORITY MODE: ${authorityMode(options.agent.follow)}`,
+    ...options.agent.leadership === "leader" ? ["DEFAULT APPLIED: follow=user"] : [],
+    `TIMESTAMP: ${(/* @__PURE__ */ new Date()).toISOString()}`
+  ];
+  if (options.warning) {
+    lines.push("", "## WARNING", "", `WARNING: ${options.warning}`);
+  }
+  if (options.agent.leadership === "leader") {
+    lines.push(...autoEnterLeaderSections(options));
+  } else {
+    lines.push(...autoEnterFollowerSections(options));
+  }
+  return `${lines.join("\n")}
+`;
+}
 function renderLog(workspace, events) {
   return [
     "# CODEWORK EVENT LOG",
@@ -864,6 +983,153 @@ function warningLines(state) {
   }
   return state.warnings.map((warning) => `- ${warning.code}: ${warning.message} (${warning.createdAt})`);
 }
+function autoEnterLeaderSections(options) {
+  if (options.mode === "new-leader") {
+    return [
+      "",
+      "## WHY YOU ARE LEADER",
+      "",
+      "You are the first participant detected in this directory workspace.",
+      "Codework registered you as the leader for this workspace.",
+      "",
+      "## SAFETY DEFAULT",
+      "",
+      "DEFAULT APPLIED: follow=user",
+      "Reason: Human-led coordination is the safe default. Self-led project ownership must be explicit.",
+      "",
+      "MUST: Treat the human user as the highest visible project authority.",
+      "MUST: Convert vague user requests into concrete implementation directives.",
+      "MUST: Coordinate later agents through Codework events.",
+      "MUST NOT: switch to self-led authority unless the human explicitly requests it.",
+      "",
+      "## NEXT STEPS",
+      "",
+      "MUST: Wait for the human user's project instruction if none has been given yet.",
+      "MUST: When a follower appears, assign work with:",
+      'codework say worker-2 "..."',
+      "MUST: Check follower events by running:",
+      "codework",
+      "",
+      "## SHORT COMMANDS",
+      "",
+      "- codework",
+      "- codework status",
+      '- codework say worker-2 "..."',
+      '- codework done "..."'
+    ];
+  }
+  if (options.actionableEvents.length > 0) {
+    return [
+      "",
+      "## ACTIONABLE TEAM EVENTS",
+      "",
+      ...structuredEventLines(options.actionableEvents),
+      "",
+      "## LEADER NEXT ACTION",
+      "",
+      "MUST: Handle follower blocker, question, or completion report before assuming team state.",
+      "MUST: If follower work is needed, send a directive with `codework say`.",
+      "MUST NOT: assume follower completion from silence.",
+      "",
+      "NEXT CHECK COMMAND AFTER HANDLING:",
+      "codework"
+    ];
+  }
+  return [
+    "",
+    "## NO ACTIONABLE TEAM EVENTS",
+    "",
+    "No follower blocker, question, or completion report arrived during this poll window.",
+    "",
+    "## LEADER NEXT ACTION",
+    "",
+    "MUST: Continue following the human user's current instruction if one exists.",
+    "MUST: If follower work is needed, send a directive with `codework say`.",
+    "MUST: If you are waiting for follower completion, run `codework` again.",
+    "MUST NOT: assume follower completion from silence.",
+    "",
+    "RE-RUN TO CHECK TEAM EVENTS:",
+    "codework"
+  ];
+}
+function autoEnterFollowerSections(options) {
+  const leader = options.leader;
+  const leaderName = leader?.name ?? options.agent.follow;
+  const lines = [
+    "",
+    "## LEADER DETECTED",
+    "",
+    "You have an earlier participant in this workspace.",
+    "That earlier participant is the leader for this directory workspace.",
+    "You are joining as a follower engineer.",
+    "",
+    "Leader:",
+    `- agent: ${leaderName}`,
+    `- follow: ${leader?.follow ?? "user"}`,
+    `- role: ${leader?.role ?? "leader"}`,
+    "",
+    "## FOLLOW RULE",
+    "",
+    `MUST: Follow directives from ${leaderName}.`,
+    "MUST: Poll for instructions before starting implementation.",
+    "MUST NOT: reinterpret the human request independently when a leader exists.",
+    "MUST NOT: start implementation until an actionable event appears or the human directly gives you a new explicit instruction."
+  ];
+  if (options.actionableEvents.length > 0) {
+    lines.push(
+      "",
+      "## ACTIONABLE EVENTS",
+      "",
+      ...structuredEventLines(options.actionableEvents),
+      "",
+      "## REQUIRED NEXT ACTION",
+      "",
+      "MUST: Handle the directive above now.",
+      "MUST: Report completion with:",
+      'codework done "..."',
+      "MUST: If blocked, report with:",
+      `codework say ${leaderName} --kind=blocker "..."`,
+      "MUST NOT: continue polling before handling this directive.",
+      "",
+      "NEXT CHECK COMMAND AFTER HANDLING:",
+      "codework"
+    );
+    return lines;
+  }
+  lines.push(
+    "",
+    "## POLL RESULT",
+    "",
+    "No actionable events arrived during this poll window."
+  );
+  if (options.nonActionableEvents.length > 0) {
+    lines.push("", "## OBSERVED NON-ACTIONABLE EVENTS", "", ...structuredEventLines(options.nonActionableEvents));
+  }
+  lines.push(
+    "",
+    "## WAIT CONTINUATION REQUIRED",
+    "",
+    "MUST: Run the exact command below again.",
+    "MUST: Continue repeating it until an actionable event appears, the human gives a new instruction, or you explicitly report that you are still waiting.",
+    "MUST NOT: treat this empty poll as task completion.",
+    "MUST NOT: invent leader state.",
+    "MUST NOT: start unrelated work merely because no event arrived.",
+    "",
+    "RE-RUN EXACT COMMAND:",
+    "codework",
+    "",
+    "## REPORTING RULE",
+    "",
+    "CODEWORK WAITING REPORT:",
+    `- Agent: ${options.agent.name}`,
+    `- Workspace: ${options.state.workspace}`,
+    `- Waiting for: directive or actionable event from ${leaderName}`,
+    `- Consecutive empty polls: ${options.consecutiveEmptyPolls}`,
+    "- Last poll command: codework",
+    "- Next action: run codework again"
+  );
+  return lines;
+}
 function waitingForFollowTargetLines(state, agent, workspace) {
   if (!agent || agent.follow === "user" || agent.follow === "self") {
     return [];
@@ -957,11 +1223,10 @@ function formatPollSeconds(value) {
 
 // src/commands/doctor.ts
 async function runDoctorCommand(ctx) {
-  const workspace = ctx.workspace ? slugifyIdentifier(ctx.workspace, "--workspace") : void 0;
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace?.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   const homeExisted = await exists(paths.home);
@@ -982,7 +1247,7 @@ async function runDoctorCommand(ctx) {
   if (paths.workspaceDir) {
     const state = await loadState(paths.workspaceDir);
     if (!state) {
-      checks.push(`warn: workspace state not found for ${workspace?.value}`);
+      checks.push(`warn: workspace state not found for ${paths.workspace ?? "(directory default)"}`);
     } else {
       checks.push(`ok: state.json schemaVersion=${state.schemaVersion}`);
       const events = await readEvents(paths.workspaceDir);
@@ -998,12 +1263,12 @@ async function runDoctorCommand(ctx) {
   }
   return {
     text: renderDoctor({
-      workspace: workspace?.value,
+      workspace: paths.workspace,
       root: paths.root,
       home: paths.home,
       runtime: runtimeName(),
       checks,
-      nextCommand: workspace ? `codework status --workspace=${workspace.value}` : "codework new --workspace=<id> --name=<agent> --follow=<user|self|agent>"
+      nextCommand: ctx.workspace ? `codework status --workspace=${ctx.workspace}` : "codework"
     }),
     quietText: "doctor=ok\n",
     json: {
@@ -1012,7 +1277,7 @@ async function runDoctorCommand(ctx) {
       runtime: runtimeName(),
       root: paths.root,
       home: paths.home,
-      workspace: workspace?.value,
+      workspace: paths.workspace,
       checks
     }
   };
@@ -1045,11 +1310,80 @@ async function removeDirectoryIfEmpty(target) {
   }
 }
 
+// src/core/fingerprint.ts
+import crypto2 from "crypto";
+import os3 from "os";
+import process5 from "process";
+function detectAgentFingerprint(cwd) {
+  const env = process5.env;
+  const candidates = [
+    ["CODEWORK_AGENT_ID", env.CODEWORK_AGENT_ID],
+    ["TMUX_PANE", env.TMUX_PANE],
+    ["TERM_SESSION_ID", env.TERM_SESSION_ID],
+    ["WT_SESSION", env.WT_SESSION],
+    ["KITTY_WINDOW_ID", env.KITTY_WINDOW_ID],
+    ["ALACRITTY_WINDOW_ID", env.ALACRITTY_WINDOW_ID],
+    ["VSCODE_PID", env.VSCODE_PID],
+    ["process.ppid", String(process5.ppid || "")]
+  ];
+  for (const [source, value] of candidates) {
+    if (value && value.trim() !== "") {
+      return makeFingerprint(source, value);
+    }
+  }
+  return makeFingerprint(
+    "hostname+cwd+shell+ppid",
+    `${safeHostname2()}|${cwd}|${env.SHELL ?? ""}|${process5.ppid || ""}`
+  );
+}
+function makeFingerprint(source, value) {
+  return {
+    source,
+    value,
+    hash: crypto2.createHash("sha256").update(`${source}:${value}`).digest("hex").slice(0, 16)
+  };
+}
+function safeHostname2() {
+  try {
+    return os3.hostname();
+  } catch {
+    return process5.env.HOSTNAME || "unknown";
+  }
+}
+
+// src/core/identity.ts
+function findAgentByFingerprint(state, fingerprintHash) {
+  return Object.values(state.agents).find((agent) => agent.fingerprintHash === fingerprintHash);
+}
+function resolveAgentNameForCommand(state, ctx) {
+  if (ctx.name) {
+    return ctx.name;
+  }
+  if (process.env.CODEWORK_AGENT_NAME && findAgent(state, process.env.CODEWORK_AGENT_NAME)) {
+    return process.env.CODEWORK_AGENT_NAME;
+  }
+  const fingerprint = detectAgentFingerprint(ctx.cwd);
+  const agent = findAgentByFingerprint(state, fingerprint.hash);
+  if (agent) {
+    return agent.name;
+  }
+  throw new CodeworkError(2, "Agent identity is required.", identityRequiredStdout());
+}
+function identityRequiredStdout() {
+  return [
+    "# CODEWORK IDENTITY REQUIRED",
+    "",
+    "MUST: Run `codework` once in this terminal before using this command.",
+    "MUST NOT: guess your agent identity.",
+    "",
+    "RUN COMMAND:",
+    "codework"
+  ].join("\n") + "\n";
+}
+
 // src/commands/done.ts
 async function runDoneCommand(ctx, options) {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
-  const summary = validateTextSize(options.summary, "--summary");
+  const summary = validateTextSize(options.summary ?? options.positionalSummary, "--summary");
   const payload = {
     summary,
     tests: optionalText(options.tests, "--tests"),
@@ -1060,11 +1394,18 @@ async function runDoneCommand(ctx, options) {
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   return withWorkspaceLock(paths.workspaceDir, async () => {
-    const state = await requireState(paths);
+    const state = await loadState(paths.workspaceDir);
+    if (!state) {
+      if (!ctx.name) {
+        throw new CodeworkError(2, "Agent identity is required.", identityRequiredStdout());
+      }
+      throw new CodeworkError(2, `Workspace does not exist: ${paths.workspace ?? "(unknown)"}`);
+    }
+    const name = resolveAgentNameForCommand(state, ctx);
     const agent = findAgent(state, name);
     if (!agent) {
       throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
@@ -1089,10 +1430,11 @@ async function runDoneCommand(ctx, options) {
         allEvents: events,
         notice: [
           `Work report recorded as event ${event.id}.`,
+          options.tests ? "Tests field was separately provided." : "Tests field was not separately provided.",
           "Notify your follow target if the report changes their next step.",
-          `Run \`codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2\` before the next substantial step.`
+          `Run \`codework\` or \`codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2\` before the next substantial step.`
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
+        recommendedCommand: `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} done
 `,
@@ -1112,17 +1454,313 @@ function optionalText(value, optionName) {
   return validateTextSize(value, optionName);
 }
 
-// src/commands/guide.ts
-async function runGuideCommand(ctx) {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
+// src/commands/enter.ts
+import process6 from "process";
+var sleep2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function runEnterCommand(ctx, options) {
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
+    debug: ctx.debug
+  });
+  const fingerprint = detectAgentFingerprint(paths.workspaceRoot ?? paths.root);
+  const settings = normalizeEnterSettings(options);
+  const registration = await registerAutoEnterAgent(ctx, options, fingerprint);
+  if (registration.mode === "new-leader") {
+    return resultFromAutoEnter(registration, [], [], settings);
+  }
+  const pollSettings = registration.agent.leadership === "leader" ? { ...settings, waitSeconds: 0, once: true } : settings;
+  const poll = await boundedAutoPoll(paths.workspaceDir, registration.agent.name, pollSettings);
+  return resultFromAutoEnter(
+    {
+      ...registration,
+      state: poll.state,
+      agent: poll.agent,
+      leader: poll.leader ?? registration.leader
+    },
+    poll.actionableEvents,
+    poll.nonActionableEvents,
+    pollSettings
+  );
+}
+function normalizeEnterSettings(options) {
+  return {
+    waitSeconds: options.once ? 0 : parseBoundedSeconds({
+      cliValue: options.wait,
+      envValue: process6.env.CODEWORK_POLL_WAIT_SECONDS,
+      optionName: "--wait",
+      fallback: 30,
+      min: 0,
+      max: 120
+    }),
+    intervalSeconds: parseBoundedSeconds({
+      cliValue: options.interval,
+      envValue: process6.env.CODEWORK_POLL_INTERVAL_SECONDS,
+      optionName: "--interval",
+      fallback: 2,
+      min: 1,
+      max: 10
+    }),
+    once: Boolean(options.once)
+  };
+}
+async function registerAutoEnterAgent(ctx, options, fingerprint) {
+  const paths = resolveCodeworkPaths({
+    cwd: ctx.cwd,
+    home: ctx.home,
+    workspace: ctx.workspace,
+    debug: ctx.debug
+  });
+  return withWorkspaceLock(paths.workspaceDir, async () => {
+    const loaded = await loadState(paths.workspaceDir);
+    const state = loaded ?? createWorkspaceState(paths, paths.workspace ?? "workspace");
+    const events = [];
+    let warning;
+    const existing = findAgentByFingerprint(state, fingerprint.hash);
+    if (existing) {
+      existing.lastSeenAt = (/* @__PURE__ */ new Date()).toISOString();
+      existing.active = true;
+      state.updatedAt = existing.lastSeenAt;
+      await saveState(paths.workspaceDir, state);
+      return {
+        state,
+        agent: existing,
+        leader: resolveLeader(state).leader,
+        mode: existing.leadership === "leader" ? "existing-leader" : "existing-follower"
+      };
+    }
+    if (!loaded || Object.values(state.agents).filter((agent2) => agent2.active).length === 0) {
+      const leaderName = autoName(ctx, "leader");
+      const { agent: agent2 } = addOrRejoinAgent(state, {
+        name: leaderName,
+        follow: normalizeFollow(options.follow ?? "user"),
+        role: "leader",
+        cursorEventId: 0,
+        fingerprintHash: fingerprint.hash,
+        fingerprintSource: fingerprint.source,
+        autoNamed: !ctx.name && !process6.env.CODEWORK_AGENT_NAME,
+        leadership: "leader"
+      });
+      state.leaderAgent = agent2.name;
+      if (!loaded) {
+        events.push(
+          createEvent(state, {
+            actor: agent2.name,
+            type: "workspace.created",
+            payload: {
+              workspaceKind: state.workspaceKind,
+              workspaceRoot: state.workspaceRoot,
+              defaultApplied: "follow=user"
+            }
+          })
+        );
+      }
+      events.push(
+        createEvent(state, {
+          actor: agent2.name,
+          type: "agent.joined",
+          payload: {
+            name: agent2.name,
+            follow: agent2.follow,
+            leadership: agent2.leadership,
+            fingerprintSource: agent2.fingerprintSource
+          }
+        })
+      );
+      agent2.cursorEventId = latestEventId(state);
+      await appendEvents(paths.workspaceDir, events);
+      await saveState(paths.workspaceDir, state);
+      return { state, agent: agent2, leader: agent2, mode: "new-leader" };
+    }
+    const leaderResult = resolveLeader(state);
+    if (leaderResult.warning) {
+      warning = leaderResult.warning;
+      const workspaceWarning = {
+        code: "leader.selected",
+        message: warning,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      state.warnings.push(workspaceWarning);
+      events.push(
+        createEvent(state, {
+          actor: leaderResult.leader.name,
+          type: "warning.created",
+          to: "all",
+          payload: workspaceWarning
+        })
+      );
+    }
+    const leader = leaderResult.leader;
+    const followerName = autoName(ctx, nextWorkerName(state));
+    const { agent } = addOrRejoinAgent(state, {
+      name: followerName,
+      follow: leader.name,
+      role: "follower engineer",
+      cursorEventId: latestEventId(state),
+      fingerprintHash: fingerprint.hash,
+      fingerprintSource: fingerprint.source,
+      autoNamed: !ctx.name && !process6.env.CODEWORK_AGENT_NAME,
+      leadership: "follower"
+    });
+    events.push(
+      createEvent(state, {
+        actor: agent.name,
+        type: "agent.joined",
+        payload: {
+          name: agent.name,
+          follow: agent.follow,
+          leadership: agent.leadership,
+          fingerprintSource: agent.fingerprintSource
+        }
+      })
+    );
+    await appendEvents(paths.workspaceDir, events);
+    await saveState(paths.workspaceDir, state);
+    return { state, agent, leader, mode: "new-follower", warning };
+  });
+}
+async function boundedAutoPoll(workspaceDir, agentName, settings) {
+  const startedAt = Date.now();
+  let read = await readAutoPoll(workspaceDir, agentName);
+  while (read.actionableEvents.length === 0 && !settings.once && settings.waitSeconds > 0 && Date.now() - startedAt < settings.waitSeconds * 1e3) {
+    const remainingMs = startedAt + settings.waitSeconds * 1e3 - Date.now();
+    await sleep2(Math.min(settings.intervalSeconds * 1e3, Math.max(0, remainingMs)));
+    read = await readAutoPoll(workspaceDir, agentName);
+  }
+  return finalizeAutoPoll(workspaceDir, agentName);
+}
+async function readAutoPoll(workspaceDir, agentName) {
+  return withWorkspaceLock(workspaceDir, async () => {
+    const state = await loadState(workspaceDir);
+    if (!state) {
+      throw new Error("workspace state disappeared during auto-enter");
+    }
+    const agent = findAgent(state, agentName);
+    if (!agent) {
+      throw new Error("agent state disappeared during auto-enter");
+    }
+    const leader = resolveLeader(state).leader;
+    const events = relevantUnreadEvents(state, await readEvents(workspaceDir), agent);
+    return splitAutoEvents(state, agent, leader, events);
+  });
+}
+async function finalizeAutoPoll(workspaceDir, agentName) {
+  return withWorkspaceLock(workspaceDir, async () => {
+    const state = await loadState(workspaceDir);
+    if (!state) {
+      throw new Error("workspace state disappeared during auto-enter");
+    }
+    const agent = findAgent(state, agentName);
+    if (!agent) {
+      throw new Error("agent state disappeared during auto-enter");
+    }
+    const leader = resolveLeader(state).leader;
+    const events = relevantUnreadEvents(state, await readEvents(workspaceDir), agent);
+    const split = splitAutoEvents(state, agent, leader, events);
+    const maxDisplayedEventId = events.reduce((max, event) => Math.max(max, event.id), 0);
+    agent.cursorEventId = maxDisplayedEventId > 0 ? maxDisplayedEventId : latestEventId(state);
+    agent.lastSeenAt = (/* @__PURE__ */ new Date()).toISOString();
+    agent.lastPollAt = agent.lastSeenAt;
+    agent.lastPollCommand = "codework";
+    agent.lastPollEmptyCount = split.actionableEvents.length > 0 ? 0 : (agent.lastPollEmptyCount ?? 0) + 1;
+    state.updatedAt = agent.lastSeenAt;
+    await saveState(workspaceDir, state);
+    return splitAutoEvents(state, agent, leader, events);
+  });
+}
+function splitAutoEvents(state, agent, leader, events) {
+  const actionableEvents = events.filter((event) => isAutoActionableEvent(agent, event));
+  return {
+    state,
+    agent,
+    leader,
+    actionableEvents,
+    nonActionableEvents: events.filter((event) => !isAutoActionableEvent(agent, event))
+  };
+}
+function isAutoActionableEvent(agent, event) {
+  if (agent.leadership === "leader") {
+    if (event.type === "warning.created") {
+      return true;
+    }
+    if (event.type === "work.done" && event.actor !== agent.name) {
+      return true;
+    }
+    return event.type === "message.posted" && (event.kind === "question" || event.kind === "blocker" || event.kind === "directive");
+  }
+  return isActionableEvent(event, agent);
+}
+function resolveLeader(state) {
+  const explicit = state.leaderAgent ? findAgent(state, state.leaderAgent) : void 0;
+  if (explicit?.active) {
+    explicit.leadership = "leader";
+    return { leader: explicit };
+  }
+  const activeAgents = Object.values(state.agents).filter((agent) => agent.active).sort((a, b) => (a.joinOrder ?? 0) - (b.joinOrder ?? 0) || a.joinedAt.localeCompare(b.joinedAt));
+  const selected = activeAgents.find((agent) => agent.follow === "user") ?? activeAgents[0];
+  if (!selected) {
+    throw new Error("No active leader candidate exists.");
+  }
+  selected.leadership = "leader";
+  selected.follow = selected.follow || "user";
+  state.leaderAgent = selected.name;
+  return {
+    leader: selected,
+    warning: "No explicit leader was found. Codework selected the earliest active participant as temporary leader."
+  };
+}
+function autoName(ctx, fallback) {
+  const requested = ctx.name ?? process6.env.CODEWORK_AGENT_NAME ?? fallback;
+  return slugifyIdentifier(requested, "--name").value;
+}
+function nextWorkerName(state) {
+  const used = new Set(Object.values(state.agents).map((agent) => agent.name));
+  let index = Math.max(2, Object.keys(state.agents).length + 1);
+  while (used.has(`worker-${index}`)) {
+    index += 1;
+  }
+  return `worker-${index}`;
+}
+function resultFromAutoEnter(registration, actionableEvents, nonActionableEvents, settings) {
+  return {
+    text: renderAutoEnter({
+      state: registration.state,
+      agent: registration.agent,
+      leader: registration.leader,
+      actionableEvents,
+      nonActionableEvents,
+      waitSeconds: settings.waitSeconds,
+      intervalSeconds: settings.intervalSeconds,
+      consecutiveEmptyPolls: registration.agent.lastPollEmptyCount ?? 0,
+      mode: registration.mode,
+      warning: registration.warning
+    }),
+    quietText: `${registration.agent.leadership}=${registration.agent.name}
+`,
+    json: {
+      ok: true,
+      command: "enter",
+      workspace: registration.state.workspace,
+      workspaceSlug: registration.state.workspaceSlug,
+      agent: registration.agent,
+      leader: registration.leader,
+      actionableEvents,
+      nonActionableEvents
+    }
+  };
+}
+
+// src/commands/guide.ts
+async function runGuideCommand(ctx) {
+  const paths = resolveCodeworkPaths({
+    cwd: ctx.cwd,
+    home: ctx.home,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   const state = await requireState(paths);
+  const name = resolveAgentNameForCommand(state, ctx);
   const agent = findAgent(state, name);
   if (!agent) {
     throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
@@ -1136,9 +1774,9 @@ async function runGuideCommand(ctx) {
       unreadEvents: unread,
       allEvents: events,
       notice: ["Full guide reprinted for the calling agent."],
-      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
+      recommendedCommand: `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2`
     }),
-    quietText: `workspace=${workspace.value} agent=${agent.name} guide
+    quietText: `workspace=${state.workspace} agent=${agent.name} guide
 `,
     json: {
       ok: true,
@@ -1171,8 +1809,13 @@ async function runJoinCommand(ctx, options) {
       name: name.value,
       follow,
       role: options.role,
-      cursorEventId: rejoinCursorSeed(stateHasAgent(state, name.slug), existingLatest)
+      cursorEventId: rejoinCursorSeed(stateHasAgent(state, name.slug), existingLatest),
+      autoNamed: false,
+      leadership: follow === "user" && !state.leaderAgent ? "leader" : "follower"
     });
+    if (agent.leadership === "leader" && !state.leaderAgent) {
+      state.leaderAgent = agent.name;
+    }
     const events = [
       createEvent(state, {
         actor: agent.name,
@@ -1181,6 +1824,7 @@ async function runJoinCommand(ctx, options) {
           name: agent.name,
           role: agent.role,
           follow: agent.follow,
+          leadership: agent.leadership,
           sessionCount: agent.sessionCount,
           rejoin
         }
@@ -1348,8 +1992,11 @@ async function runNewCommand(ctx, options) {
       name: name.value,
       follow,
       role: options.role,
-      cursorEventId: 0
+      cursorEventId: 0,
+      autoNamed: false,
+      leadership: "leader"
     });
+    state.leaderAgent = agent.name;
     const events = [
       createEvent(state, {
         actor: agent.name,
@@ -1367,6 +2014,7 @@ async function runNewCommand(ctx, options) {
           name: agent.name,
           role: agent.role,
           follow: agent.follow,
+          leadership: agent.leadership,
           sessionCount: agent.sessionCount,
           rejoin: false
         }
@@ -1407,32 +2055,19 @@ function requireNewOptions(options) {
 }
 
 // src/commands/poll.ts
-import process5 from "process";
-var sleep2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+import process7 from "process";
+var sleep3 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function runPollCommand(ctx, options, commandKind = "poll") {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
   const settings = normalizePollSettings(options);
-  const canonicalCommand = buildCanonicalPollCommand({
-    kind: commandKind,
-    workspace: workspace.value,
-    name,
-    waitSeconds: settings.waitSeconds,
-    intervalSeconds: settings.intervalSeconds
-  });
-  const nextPollCommand = buildCanonicalPollCommand({
-    kind: "poll",
-    workspace: workspace.value,
-    name,
-    waitSeconds: settings.waitSeconds,
-    intervalSeconds: settings.intervalSeconds
-  });
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
+  const name = await resolvePollAgentName(paths.workspaceDir, ctx);
+  const canonicalCommand = canonicalPollCommand(commandKind, ctx, paths.workspace ?? "workspace", name, settings);
+  const nextPollCommand = canonicalPollCommand("poll", ctx, paths.workspace ?? "workspace", name, settings);
   const startedAt = Date.now();
   let readResult;
   while (true) {
@@ -1444,7 +2079,7 @@ async function runPollCommand(ctx, options, commandKind = "poll") {
     if (remainingMs <= 0) {
       break;
     }
-    await sleep2(Math.min(settings.intervalSeconds * 1e3, remainingMs));
+    await sleep3(Math.min(settings.intervalSeconds * 1e3, remainingMs));
   }
   const finalResult = await finalizePoll(paths.workspaceDir, name, settings, canonicalCommand);
   const pollResult = finalResult.actionableEvents.length > 0 ? "actionable-events-found" : "timeout-without-actionable-event";
@@ -1479,10 +2114,34 @@ async function runPollCommand(ctx, options, commandKind = "poll") {
     }
   };
 }
+async function resolvePollAgentName(workspaceDir, ctx) {
+  return withWorkspaceLock(workspaceDir, async () => {
+    const state = await requireState({ workspaceDir, cwd: "", root: "", home: "" });
+    return resolveAgentNameForCommand(state, ctx);
+  });
+}
+function canonicalPollCommand(kind, ctx, workspace, name, settings) {
+  if (!ctx.workspace && !ctx.name) {
+    return `codework ${kind} --wait=${settings.waitSeconds} --interval=${settings.intervalSeconds}`;
+  }
+  if (!ctx.workspace) {
+    return `codework ${kind} --name=${shellQuote(name)} --wait=${settings.waitSeconds} --interval=${settings.intervalSeconds}`;
+  }
+  if (!ctx.name) {
+    return `codework ${kind} --workspace=${shellQuote(ctx.workspace)} --wait=${settings.waitSeconds} --interval=${settings.intervalSeconds}`;
+  }
+  return buildCanonicalPollCommand({
+    kind,
+    workspace,
+    name,
+    waitSeconds: settings.waitSeconds,
+    intervalSeconds: settings.intervalSeconds
+  });
+}
 function normalizePollSettings(options) {
   const waitSeconds = options.once ? 0 : parseBoundedSeconds({
     cliValue: options.wait,
-    envValue: process5.env.CODEWORK_POLL_WAIT_SECONDS,
+    envValue: process7.env.CODEWORK_POLL_WAIT_SECONDS,
     optionName: "--wait",
     fallback: 30,
     min: 0,
@@ -1490,7 +2149,7 @@ function normalizePollSettings(options) {
   });
   const intervalSeconds = parseBoundedSeconds({
     cliValue: options.interval,
-    envValue: process5.env.CODEWORK_POLL_INTERVAL_SECONDS,
+    envValue: process7.env.CODEWORK_POLL_INTERVAL_SECONDS,
     optionName: "--interval",
     fallback: 2,
     min: 1,
@@ -1551,24 +2210,29 @@ function buildPollReadResult(state, agent, allEvents, settings) {
 
 // src/commands/say.ts
 async function runSayCommand(ctx, options) {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
-  const message = validateTextSize(options.message, "--message");
-  const requestedTo = normalizeTo(options.to);
-  const kind = validateMessageKind(options.kind ?? "note");
-  const to = kind === "blocker" ? "all" : requestedTo;
+  const message = validateTextSize(options.message ?? options.positionalMessage, "--message");
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   return withWorkspaceLock(paths.workspaceDir, async () => {
-    const state = await requireState(paths);
+    const state = await loadState(paths.workspaceDir);
+    if (!state) {
+      if (!ctx.name) {
+        throw new CodeworkError(2, "Agent identity is required.", identityRequiredStdout());
+      }
+      throw new CodeworkError(2, `Workspace does not exist: ${paths.workspace ?? "(unknown)"}`);
+    }
+    const name = resolveAgentNameForCommand(state, ctx);
     const agent = findAgent(state, name);
     if (!agent) {
       throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
     }
+    const requestedTo = normalizeTo(options.positionalTo ?? options.to);
+    const kind = validateMessageKind(options.kind ?? defaultMessageKind(state, agent, requestedTo));
+    const to = kind === "blocker" ? "all" : requestedTo;
     const event = createEvent(state, {
       actor: agent.name,
       type: "message.posted",
@@ -1594,7 +2258,7 @@ async function runSayCommand(ctx, options) {
           `Message recorded: kind=${kind}, to=${to}.`,
           kind === "directive" ? "Directive messages must be treated as strong coordination instructions by recipients." : kind === "blocker" ? "Blocker messages are visible to all agents." : "Message is available through Codework poll/status/log."
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
+        recommendedCommand: `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} kind=${kind} to=${to}
 `,
@@ -1607,19 +2271,23 @@ async function runSayCommand(ctx, options) {
     };
   });
 }
+function defaultMessageKind(state, agent, to) {
+  const target = Object.values(state.agents).find((candidate) => candidate.name === to);
+  return agent.leadership === "leader" && target?.leadership === "follower" ? "directive" : "note";
+}
 
 // src/commands/status.ts
 async function runStatusCommand(ctx) {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   const state = await requireState(paths);
   const events = await readEvents(paths.workspaceDir);
-  const agent = findAgent(state, ctx.name);
+  const agentName = optionalAgentName(state, ctx);
+  const agent = findAgent(state, agentName);
   const unread = agent ? relevantUnreadEvents(state, events, agent) : [];
   const notice = [
     `Workspace root: ${state.root}.`,
@@ -1631,14 +2299,14 @@ async function runStatusCommand(ctx) {
   return {
     text: renderGuide({
       state,
-      agentName: ctx.name,
+      agentName,
       unreadEvents: unread,
       allEvents: events,
       notice,
-      recommendedCommand: agent ? `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2` : `codework status --workspace=${workspace.value} --name=<agent>`,
+      recommendedCommand: agent ? `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2` : "codework status",
       statusMode: true
     }),
-    quietText: `workspace=${workspace.value} agents=${Object.keys(state.agents).length}
+    quietText: `workspace=${state.workspace} agents=${Object.keys(state.agents).length}
 `,
     json: {
       ok: true,
@@ -1651,6 +2319,13 @@ async function runStatusCommand(ctx) {
     }
   };
 }
+function optionalAgentName(state, ctx) {
+  try {
+    return resolveAgentNameForCommand(state, ctx);
+  } catch {
+    return ctx.name;
+  }
+}
 
 // src/commands/wait.ts
 async function runWaitCommand(ctx, options) {
@@ -1659,10 +2334,10 @@ async function runWaitCommand(ctx, options) {
 
 // src/cli.ts
 var defaultIo = {
-  stdout: (text) => process6.stdout.write(text),
-  stderr: (text) => process6.stderr.write(text)
+  stdout: (text) => process8.stdout.write(text),
+  stderr: (text) => process8.stderr.write(text)
 };
-async function main(argv = process6.argv, io = defaultIo) {
+async function main(argv = process8.argv, io = defaultIo) {
   const program = buildProgram(io);
   const parsedArgv = [argv[0] ?? "node", argv[1] ?? "codework", ...preprocessArgv(argv.slice(2))];
   try {
@@ -1696,56 +2371,112 @@ function buildProgram(io) {
     writeErr: (text) => io.stdout(text)
   });
   addCommonOptions(program, true);
-  addCommonOptions(program.command("new").description("Create a new Codework workspace and register the first agent.")).option("--follow <user|self|agent>", "Authority/follow target.").option("--role <text>", "Agent role.").option("--goal <text>", "Workspace goal.").option("--force", "Recreate an existing workspace.").action(async function() {
-    const options = this.opts();
-    requireNewOptions(options);
-    await emitResult(io, contextFrom(this), await runNewCommand(contextFrom(this), options));
+  program.option("--wait <seconds>", "Maximum seconds for auto-enter bounded poll.").option("--interval <seconds>", "Seconds between auto-enter poll checks.").option("--once", "Read once without waiting during auto-enter.").option("--follow <user|self|agent>", "Explicit follow mode for first auto-enter leader.");
+  program.action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runEnterCommand(ctx, optionsFrom(command)));
   });
-  addCommonOptions(program.command("join").description("Join an existing Codework workspace.")).option("--follow <user|self|agent>", "Authority/follow target.").option("--role <text>", "Agent role.").action(async function() {
-    const options = this.opts();
+  addCommonOptions(program.command("enter").description("Enter the current directory workspace automatically.")).option("--wait <seconds>", "Maximum seconds for bounded poll.").option("--interval <seconds>", "Seconds between poll checks.").option("--once", "Read once without waiting.").option("--follow <user|self|agent>", "Explicit follow mode for first auto-enter leader.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runEnterCommand(ctx, optionsFrom(command)));
+  });
+  addCommonOptions(program.command("new").description("Create a new Codework workspace and register the first agent.")).option("--follow <user|self|agent>", "Authority/follow target.").option("--role <text>", "Agent role.").option("--goal <text>", "Workspace goal.").option("--force", "Recreate an existing workspace.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const options = optionsFrom(command);
+    requireNewOptions(options);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runNewCommand(ctx, options));
+  });
+  addCommonOptions(program.command("join").description("Join an existing Codework workspace.")).option("--follow <user|self|agent>", "Authority/follow target.").option("--role <text>", "Agent role.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const options = optionsFrom(command);
     requireJoinOptions(options);
-    await emitResult(io, contextFrom(this), await runJoinCommand(contextFrom(this), options));
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runJoinCommand(ctx, options));
   });
   addCommonOptions(program.command("guide").description("Reprint the complete operational guide for an agent.")).action(
-    async function() {
-      await emitResult(io, contextFrom(this), await runGuideCommand(contextFrom(this)));
+    async (...args) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runGuideCommand(ctx));
     }
   );
   addCommonOptions(program.command("status").description("Print workspace state, agents, follow graph, and latest events.")).action(
-    async function() {
-      await emitResult(io, contextFrom(this), await runStatusCommand(contextFrom(this)));
+    async (...args) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runStatusCommand(ctx));
     }
   );
-  addCommonOptions(program.command("poll").description("Read unread events for the calling agent.")).option("--wait <seconds>", "Maximum seconds to wait for new actionable events.").option("--interval <seconds>", "Seconds between event log checks.").option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").option("--once", "Read once without waiting.").action(async function() {
-    await emitResult(io, contextFrom(this), await runPollCommand(contextFrom(this), this.opts()));
+  addCommonOptions(program.command("poll").description("Read unread events for the calling agent.")).option("--wait <seconds>", "Maximum seconds to wait for new actionable events.").option("--interval <seconds>", "Seconds between event log checks.").option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").option("--once", "Read once without waiting.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runPollCommand(ctx, optionsFrom(command)));
   });
-  addCommonOptions(program.command("wait").description("Wait for actionable events for the calling agent.")).option("--wait <seconds>", "Maximum seconds to wait for new actionable events.").option("--interval <seconds>", "Seconds between event log checks.").option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").option("--once", "Read once without waiting.").action(async function() {
-    await emitResult(io, contextFrom(this), await runWaitCommand(contextFrom(this), this.opts()));
+  addCommonOptions(program.command("wait").description("Wait for actionable events for the calling agent.")).option("--wait <seconds>", "Maximum seconds to wait for new actionable events.").option("--interval <seconds>", "Seconds between event log checks.").option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").option("--once", "Read once without waiting.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runWaitCommand(ctx, optionsFrom(command)));
   });
-  addCommonOptions(program.command("say").description("Post a message event to the workspace.")).option("--message <text>", "Message body.").option("--to <agent|all>", "Recipient.", "all").option("--kind <note|directive|question|blocker>", "Message kind.", "note").action(async function() {
-    await emitResult(io, contextFrom(this), await runSayCommand(contextFrom(this), this.opts()));
+  addCommonOptions(program.command("say [to] [message...]").description("Post a message event to the workspace.")).option("--message <text>", "Message body.").option("--to <agent|all>", "Recipient.", "all").option("--kind <note|directive|question|blocker>", "Message kind.").action(async (to, message, _options, command) => {
+    const ctx = contextFrom(command);
+    await emitResult(
+      io,
+      ctx,
+      await runSayCommand(ctx, {
+        ...optionsFrom(command),
+        positionalTo: to,
+        positionalMessage: message?.join(" ")
+      })
+    );
   });
-  addCommonOptions(program.command("done").description("Record completed or intermediate work.")).option("--summary <text>", "Work summary.").option("--tests <text>", "Tests or verification.").option("--changed <text>", "Files or areas changed.").option("--next <text>", "Next step.").option("--blockers <text>", "Remaining blockers.").action(async function() {
-    await emitResult(io, contextFrom(this), await runDoneCommand(contextFrom(this), this.opts()));
+  addCommonOptions(program.command("done [summary...]").description("Record completed or intermediate work.")).option("--summary <text>", "Work summary.").option("--tests <text>", "Tests or verification.").option("--changed <text>", "Files or areas changed.").option("--next <text>", "Next step.").option("--blockers <text>", "Remaining blockers.").action(async (summary, _options, command) => {
+    const ctx = contextFrom(command);
+    await emitResult(
+      io,
+      ctx,
+      await runDoneCommand(ctx, {
+        ...optionsFrom(command),
+        positionalSummary: summary?.join(" ")
+      })
+    );
   });
-  addCommonOptions(program.command("log").description("Read workspace event log.")).option("--tail <n>", "Number of latest events.", "50").option("--json", "Emit JSON for log command.").action(async function() {
-    const ctx = contextFrom(this);
-    const result = await runLogCommand(ctx, this.opts());
-    const local = this.opts();
+  addCommonOptions(program.command("log").description("Read workspace event log.")).option("--tail <n>", "Number of latest events.", "50").option("--json", "Emit JSON for log command.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    const options = optionsFrom(command);
+    const result = await runLogCommand(ctx, options);
+    const local = options;
     await emitResult(io, local.json ? { ...ctx, format: "json" } : ctx, result);
   });
-  addCommonOptions(program.command("leave").description("Mark an agent inactive.")).option("--reason <text>", "Reason for leaving.").action(async function() {
-    await emitResult(io, contextFrom(this), await runLeaveCommand(contextFrom(this), this.opts()));
+  addCommonOptions(program.command("leave").description("Mark an agent inactive.")).option("--reason <text>", "Reason for leaving.").action(async (...args) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runLeaveCommand(ctx, optionsFrom(command)));
   });
   addCommonOptions(program.command("doctor").description("Check runtime, write access, lock behavior, and state integrity.")).action(
-    async function() {
-      await emitResult(io, contextFrom(this), await runDoctorCommand(contextFrom(this)));
+    async (...args) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runDoctorCommand(ctx));
     }
   );
   return program;
 }
+function commandFromActionArgs(args) {
+  const command = args.at(-1);
+  if (command instanceof Command) {
+    return command;
+  }
+  throw new CodeworkError(1, "Unable to resolve Commander action context.");
+}
+function optionsFrom(command) {
+  return command.optsWithGlobals();
+}
 function addCommonOptions(command, withDefaults = false) {
-  command.option("--workspace <id>", "Workspace id.").option("--name <agent>", "Calling agent name.").option("--format <format>", "text | json.", withDefaults ? "text" : void 0).option("--quiet", "Only print machine/minimal output.").option("--debug", "Print diagnostics to stderr.").option("--cwd <path>", "Repository/work root.", withDefaults ? process6.cwd() : void 0).option("--home <path>", "Override Codework home.").option("--no-color", "Do not emit ANSI color.");
+  command.option("--workspace <id>", "Workspace id.").option("--name <agent>", "Calling agent name.").option("--format <format>", "text | json.", withDefaults ? "text" : void 0).option("--quiet", "Only print machine/minimal output.").option("--debug", "Print diagnostics to stderr.").option("--cwd <path>", "Repository/work root.", withDefaults ? process8.cwd() : void 0).option("--home <path>", "Override Codework home.").option("--no-color", "Do not emit ANSI color.");
   return command;
 }
 function contextFrom(command) {
@@ -1761,7 +2492,7 @@ function contextFrom(command) {
     format: validateFormat(merged.format),
     quiet: Boolean(merged.quiet),
     debug: Boolean(merged.debug),
-    cwd: merged.cwd ?? process6.cwd(),
+    cwd: merged.cwd ?? process8.cwd(),
     home: merged.home
   };
 }
@@ -1778,6 +2509,10 @@ async function emitResult(io, ctx, result) {
   io.stdout(result.text);
 }
 function emitError(io, argv, error) {
+  if (error.stdout) {
+    io.stdout(error.stdout);
+    return;
+  }
   const format = requestedFormat(argv);
   if (format === "json") {
     io.stdout(`${JSON.stringify({ ok: false, exitCode: error.exitCode, error: error.message }, null, 2)}
@@ -1814,16 +2549,16 @@ function requestedFormat(argv) {
 }
 if (isDirectRun()) {
   const code = await main();
-  process6.exit(code);
+  process8.exit(code);
 }
 function isDirectRun() {
-  const argvPath = process6.argv[1];
+  const argvPath = process8.argv[1];
   if (!argvPath) {
     return false;
   }
   const modulePath = fileURLToPath(import.meta.url);
   try {
-    return realpathSync(modulePath) === realpathSync(argvPath);
+    return realpathSync2(modulePath) === realpathSync2(argvPath);
   } catch {
     return modulePath === argvPath;
   }

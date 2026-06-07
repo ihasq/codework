@@ -52,8 +52,11 @@ export async function runNewCommand(ctx: CommandContext, options: NewCommandOpti
       name: name.value,
       follow,
       role: options.role,
-      cursorEventId: 0
+      cursorEventId: 0,
+      autoNamed: false,
+      leadership: "leader"
     });
+    state.leaderAgent = agent.name;
 
     const events = [
       createEvent(state, {
@@ -72,6 +75,7 @@ export async function runNewCommand(ctx: CommandContext, options: NewCommandOpti
           name: agent.name,
           role: agent.role,
           follow: agent.follow,
+          leadership: agent.leadership,
           sessionCount: agent.sessionCount,
           rejoin: false
         }

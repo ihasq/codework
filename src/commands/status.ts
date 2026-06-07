@@ -1,21 +1,21 @@
 import { readEvents, relevantUnreadEvents } from "../core/events.ts";
+import { resolveAgentNameForCommand } from "../core/identity.ts";
 import { resolveCodeworkPaths } from "../core/paths.ts";
 import { renderGuide } from "../core/render.ts";
 import { findAgent, requireState } from "../core/state.ts";
 import type { CodeworkEvent, CommandContext, CommandResult } from "../core/types.ts";
-import { slugifyIdentifier } from "../core/validate.ts";
 
 export async function runStatusCommand(ctx: CommandContext): Promise<CommandResult> {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   const state = await requireState(paths);
   const events = await readEvents(paths.workspaceDir!);
-  const agent = findAgent(state, ctx.name);
+  const agentName = optionalAgentName(state, ctx);
+  const agent = findAgent(state, agentName);
   const unread: CodeworkEvent[] = agent ? relevantUnreadEvents(state, events, agent) : [];
   const notice = [
     `Workspace root: ${state.root}.`,
@@ -28,16 +28,16 @@ export async function runStatusCommand(ctx: CommandContext): Promise<CommandResu
   return {
     text: renderGuide({
       state,
-      agentName: ctx.name,
+      agentName,
       unreadEvents: unread,
       allEvents: events,
       notice,
       recommendedCommand: agent
-        ? `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
-        : `codework status --workspace=${workspace.value} --name=<agent>`,
+        ? `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2`
+        : "codework status",
       statusMode: true
     }),
-    quietText: `workspace=${workspace.value} agents=${Object.keys(state.agents).length}\n`,
+    quietText: `workspace=${state.workspace} agents=${Object.keys(state.agents).length}\n`,
     json: {
       ok: true,
       command: "status",
@@ -48,4 +48,12 @@ export async function runStatusCommand(ctx: CommandContext): Promise<CommandResu
       latestEvents: events.slice(-20)
     }
   };
+}
+
+function optionalAgentName(state: Parameters<typeof resolveAgentNameForCommand>[0], ctx: CommandContext): string | undefined {
+  try {
+    return resolveAgentNameForCommand(state, ctx);
+  } catch {
+    return ctx.name;
+  }
 }

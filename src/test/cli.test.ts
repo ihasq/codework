@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -29,6 +29,25 @@ async function run(args: string[], cwd: string): Promise<RunResult> {
   return { code, stdout, stderr };
 }
 
+async function runWithEnv(args: string[], cwd: string, env: Record<string, string>): Promise<RunResult> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    return await run(args, cwd);
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 function workspaceDir(root: string, workspace: string): string {
   return path.join(root, ".codework", "workspaces", workspace);
 }
@@ -40,6 +59,13 @@ async function readEvents(root: string, workspace: string): Promise<unknown[]> {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as unknown);
+}
+
+async function readDirectoryState(root: string): Promise<{ agents: Record<string, { name: string; leadership: string; sessionCount: number }> }> {
+  const workspacesDir = path.join(root, ".codework", "workspaces");
+  const entries = await readdir(workspacesDir);
+  const raw = await readFile(path.join(workspacesDir, entries[0], "state.json"), "utf8");
+  return JSON.parse(raw) as { agents: Record<string, { name: string; leadership: string; sessionCount: number }> };
 }
 
 function normalizeForSnapshot(stdout: string): string {
@@ -65,6 +91,113 @@ function normalizeForSnapshot(stdout: string): string {
 }
 
 describe("codework CLI", () => {
+  test("zero-argument codework creates a directory leader with follow=user", async () => {
+    const root = await tempRoot();
+
+    const entered = await runWithEnv([], root, { TMUX_PANE: "%1" });
+
+    expect(entered.code).toBe(0);
+    expect(entered.stdout).toContain("# CODEWORK AUTO-ENTER");
+    expect(entered.stdout).toContain("AGENT: leader");
+    expect(entered.stdout).toContain("ROLE: leader");
+    expect(entered.stdout).toContain("FOLLOW: user");
+    expect(entered.stdout).toContain("AUTHORITY MODE: user-led coordinator");
+    expect(entered.stdout).toContain("DEFAULT APPLIED: follow=user");
+  });
+
+  test("enter alias creates the same auto-enter leader", async () => {
+    const root = await tempRoot();
+
+    const entered = await runWithEnv(["enter"], root, { TMUX_PANE: "%1" });
+
+    expect(entered.code).toBe(0);
+    expect(entered.stdout).toContain("# CODEWORK AUTO-ENTER");
+    expect(entered.stdout).toContain("AGENT: leader");
+    expect(entered.stdout).toContain("FOLLOW: user");
+  });
+
+  test("second fingerprint joins as follower and empty auto-enter reruns codework", async () => {
+    const root = await tempRoot();
+
+    await runWithEnv([], root, { TMUX_PANE: "%1" });
+    const follower = await runWithEnv(["--wait=0"], root, { TMUX_PANE: "%2" });
+
+    expect(follower.code).toBe(0);
+    expect(follower.stdout).toContain("AGENT: worker-2");
+    expect(follower.stdout).toContain("ROLE: follower engineer");
+    expect(follower.stdout).toContain("FOLLOW: leader");
+    expect(follower.stdout).toContain("You have an earlier participant in this workspace.");
+    expect(follower.stdout).toContain("That earlier participant is the leader for this directory workspace.");
+    expect(follower.stdout).toContain("MUST: Run the exact command below again.");
+    expect(follower.stdout).toContain("RE-RUN EXACT COMMAND:\ncodework");
+  });
+
+  test("leader short say sends directive and follower receives it with codework", async () => {
+    const root = await tempRoot();
+
+    await runWithEnv([], root, { TMUX_PANE: "%1" });
+    await runWithEnv(["--wait=0"], root, { TMUX_PANE: "%2" });
+    const said = await runWithEnv(["say", "worker-2", "Implement Todo app."], root, { TMUX_PANE: "%1" });
+    const follower = await runWithEnv(["--wait=0"], root, { TMUX_PANE: "%2" });
+
+    expect(said.code).toBe(0);
+    expect(follower.stdout).toContain("## ACTIONABLE EVENTS");
+    expect(follower.stdout).toContain("- FROM: leader");
+    expect(follower.stdout).toContain("- KIND: directive");
+    expect(follower.stdout).toContain("  Implement Todo app.");
+    expect(follower.stdout).toContain("MUST: Handle the directive above now.");
+  });
+
+  test("same fingerprint does not create duplicate workers", async () => {
+    const root = await tempRoot();
+
+    await runWithEnv([], root, { TMUX_PANE: "%1" });
+    await runWithEnv([], root, { TMUX_PANE: "%1" });
+    await runWithEnv(["status"], root, { TMUX_PANE: "%1" });
+    const state = await readDirectoryState(root);
+
+    expect(Object.values(state.agents).map((agent) => agent.name)).toEqual(["leader"]);
+  });
+
+  test("workspace and name can be omitted after auto-enter", async () => {
+    const root = await tempRoot();
+
+    await runWithEnv([], root, { TMUX_PANE: "%1" });
+    const status = await runWithEnv(["status"], root, { TMUX_PANE: "%1" });
+    const guide = await runWithEnv(["guide"], root, { TMUX_PANE: "%1" });
+    const poll = await runWithEnv(["poll", "--wait=0"], root, { TMUX_PANE: "%1" });
+
+    expect(status.code).toBe(0);
+    expect(guide.code).toBe(0);
+    expect(poll.code).toBe(0);
+    expect(status.stdout).toContain("AGENT: leader");
+    expect(guide.stdout).toContain("AGENT: leader");
+  });
+
+  test("short done resolves current fingerprint and identity error appears before enter", async () => {
+    const root = await tempRoot();
+    const beforeEnter = await runWithEnv(["done", "Finished implementation."], root, { TMUX_PANE: "%1" });
+
+    await runWithEnv([], root, { TMUX_PANE: "%1" });
+    const done = await runWithEnv(["done", "Finished implementation."], root, { TMUX_PANE: "%1" });
+
+    expect(beforeEnter.code).toBe(2);
+    expect(beforeEnter.stdout).toContain("# CODEWORK IDENTITY REQUIRED");
+    expect(done.code).toBe(0);
+    expect(done.stdout).toContain("Tests field was not separately provided.");
+  });
+
+  test("path workspace uses a separate directory workspace root", async () => {
+    const current = await tempRoot();
+    const other = await tempRoot();
+
+    const currentEnter = await runWithEnv([], current, { TMUX_PANE: "%1" });
+    const otherEnter = await runWithEnv([`--workspace=${other}`], current, { TMUX_PANE: "%2" });
+
+    expect(currentEnter.stdout).toContain(`WORKSPACE ROOT: ${current}`);
+    expect(otherEnter.stdout).toContain(`WORKSPACE ROOT: ${other}`);
+  });
+
   test("accepts key=value compatibility for workspace/name/follow", async () => {
     const first = await tempRoot();
     const second = await tempRoot();

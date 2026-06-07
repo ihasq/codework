@@ -1,10 +1,10 @@
 {
   "name": "codework",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TypeScript CLI harness for coordinating multiple AI coding agents through stdout-as-context.",
   "type": "module",
   "bin": {
-    "codework": "dist/cli.js"
+    "codework": "./dist/cli.js"
   },
   "files": [
     "dist",

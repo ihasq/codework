@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { preprocessArgv } from "./args.ts";
 import { runDoctorCommand } from "./commands/doctor.ts";
 import { runDoneCommand } from "./commands/done.ts";
+import { runEnterCommand } from "./commands/enter.ts";
 import { runGuideCommand } from "./commands/guide.ts";
 import { runJoinCommand, requireJoinOptions } from "./commands/join.ts";
 import { runLeaveCommand } from "./commands/leave.ts";
@@ -33,6 +34,10 @@ type CommonOptionShape = {
   cwd?: string;
   home?: string;
   color?: boolean;
+  wait?: string;
+  interval?: string;
+  once?: boolean;
+  follow?: string;
 };
 
 const defaultIo: Io = {
@@ -80,36 +85,65 @@ function buildProgram(io: Io): Command {
       writeErr: (text) => io.stdout(text)
     });
   addCommonOptions(program, true);
+  program
+    .option("--wait <seconds>", "Maximum seconds for auto-enter bounded poll.")
+    .option("--interval <seconds>", "Seconds between auto-enter poll checks.")
+    .option("--once", "Read once without waiting during auto-enter.")
+    .option("--follow <user|self|agent>", "Explicit follow mode for first auto-enter leader.");
+  program.action(async (...args: unknown[]) => {
+    const command = commandFromActionArgs(args);
+    const ctx = contextFrom(command);
+    await emitResult(io, ctx, await runEnterCommand(ctx, optionsFrom(command)));
+  });
+
+  addCommonOptions(program.command("enter").description("Enter the current directory workspace automatically."))
+    .option("--wait <seconds>", "Maximum seconds for bounded poll.")
+    .option("--interval <seconds>", "Seconds between poll checks.")
+    .option("--once", "Read once without waiting.")
+    .option("--follow <user|self|agent>", "Explicit follow mode for first auto-enter leader.")
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runEnterCommand(ctx, optionsFrom(command)));
+    });
 
   addCommonOptions(program.command("new").description("Create a new Codework workspace and register the first agent."))
     .option("--follow <user|self|agent>", "Authority/follow target.")
     .option("--role <text>", "Agent role.")
     .option("--goal <text>", "Workspace goal.")
     .option("--force", "Recreate an existing workspace.")
-    .action(async function (this: Command) {
-      const options = this.opts();
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const options = optionsFrom(command);
       requireNewOptions(options);
-      await emitResult(io, contextFrom(this), await runNewCommand(contextFrom(this), options));
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runNewCommand(ctx, options));
     });
 
   addCommonOptions(program.command("join").description("Join an existing Codework workspace."))
     .option("--follow <user|self|agent>", "Authority/follow target.")
     .option("--role <text>", "Agent role.")
-    .action(async function (this: Command) {
-      const options = this.opts();
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const options = optionsFrom(command);
       requireJoinOptions(options);
-      await emitResult(io, contextFrom(this), await runJoinCommand(contextFrom(this), options));
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runJoinCommand(ctx, options));
     });
 
   addCommonOptions(program.command("guide").description("Reprint the complete operational guide for an agent.")).action(
-    async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runGuideCommand(contextFrom(this)));
+    async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runGuideCommand(ctx));
     }
   );
 
   addCommonOptions(program.command("status").description("Print workspace state, agents, follow graph, and latest events.")).action(
-    async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runStatusCommand(contextFrom(this)));
+    async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runStatusCommand(ctx));
     }
   );
 
@@ -119,8 +153,10 @@ function buildProgram(io: Io): Command {
     .option("--since <eventId>", "Read events after this event id.")
     .option("--tail <n>", "Limit unread events.")
     .option("--once", "Read once without waiting.")
-    .action(async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runPollCommand(contextFrom(this), this.opts()));
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runPollCommand(ctx, optionsFrom(command)));
     });
 
   addCommonOptions(program.command("wait").description("Wait for actionable events for the calling agent."))
@@ -129,51 +165,88 @@ function buildProgram(io: Io): Command {
     .option("--since <eventId>", "Read events after this event id.")
     .option("--tail <n>", "Limit unread events.")
     .option("--once", "Read once without waiting.")
-    .action(async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runWaitCommand(contextFrom(this), this.opts()));
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runWaitCommand(ctx, optionsFrom(command)));
     });
 
-  addCommonOptions(program.command("say").description("Post a message event to the workspace."))
+  addCommonOptions(program.command("say [to] [message...]").description("Post a message event to the workspace."))
     .option("--message <text>", "Message body.")
     .option("--to <agent|all>", "Recipient.", "all")
-    .option("--kind <note|directive|question|blocker>", "Message kind.", "note")
-    .action(async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runSayCommand(contextFrom(this), this.opts()));
+    .option("--kind <note|directive|question|blocker>", "Message kind.")
+    .action(async (to: string | undefined, message: string[] | undefined, _options: unknown, command: Command) => {
+      const ctx = contextFrom(command);
+      await emitResult(
+        io,
+        ctx,
+        await runSayCommand(ctx, {
+          ...optionsFrom(command),
+          positionalTo: to,
+          positionalMessage: message?.join(" ")
+        })
+      );
     });
 
-  addCommonOptions(program.command("done").description("Record completed or intermediate work."))
+  addCommonOptions(program.command("done [summary...]").description("Record completed or intermediate work."))
     .option("--summary <text>", "Work summary.")
     .option("--tests <text>", "Tests or verification.")
     .option("--changed <text>", "Files or areas changed.")
     .option("--next <text>", "Next step.")
     .option("--blockers <text>", "Remaining blockers.")
-    .action(async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runDoneCommand(contextFrom(this), this.opts()));
+    .action(async (summary: string[] | undefined, _options: unknown, command: Command) => {
+      const ctx = contextFrom(command);
+      await emitResult(
+        io,
+        ctx,
+        await runDoneCommand(ctx, {
+          ...optionsFrom(command),
+          positionalSummary: summary?.join(" ")
+        })
+      );
     });
 
   addCommonOptions(program.command("log").description("Read workspace event log."))
     .option("--tail <n>", "Number of latest events.", "50")
     .option("--json", "Emit JSON for log command.")
-    .action(async function (this: Command) {
-      const ctx = contextFrom(this);
-      const result = await runLogCommand(ctx, this.opts());
-      const local = this.opts() as { json?: boolean };
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      const options = optionsFrom(command);
+      const result = await runLogCommand(ctx, options);
+      const local = options as { json?: boolean };
       await emitResult(io, local.json ? { ...ctx, format: "json" } : ctx, result);
     });
 
   addCommonOptions(program.command("leave").description("Mark an agent inactive."))
     .option("--reason <text>", "Reason for leaving.")
-    .action(async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runLeaveCommand(contextFrom(this), this.opts()));
+    .action(async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runLeaveCommand(ctx, optionsFrom(command)));
     });
 
   addCommonOptions(program.command("doctor").description("Check runtime, write access, lock behavior, and state integrity.")).action(
-    async function (this: Command) {
-      await emitResult(io, contextFrom(this), await runDoctorCommand(contextFrom(this)));
+    async (...args: unknown[]) => {
+      const command = commandFromActionArgs(args);
+      const ctx = contextFrom(command);
+      await emitResult(io, ctx, await runDoctorCommand(ctx));
     }
   );
 
   return program;
+}
+
+function commandFromActionArgs(args: unknown[]): Command {
+  const command = args.at(-1);
+  if (command instanceof Command) {
+    return command;
+  }
+  throw new CodeworkError(1, "Unable to resolve Commander action context.");
+}
+
+function optionsFrom(command: Command): ReturnType<Command["opts"]> {
+  return command.optsWithGlobals();
 }
 
 function addCommonOptions(command: Command, withDefaults = false): Command {
@@ -220,6 +293,10 @@ async function emitResult(io: Io, ctx: CommandContext, result: CommandResult): P
 }
 
 function emitError(io: Io, argv: string[], error: CodeworkError): void {
+  if (error.stdout) {
+    io.stdout(error.stdout);
+    return;
+  }
   const format = requestedFormat(argv);
   if (format === "json") {
     io.stdout(`${JSON.stringify({ ok: false, exitCode: error.exitCode, error: error.message }, null, 2)}\n`);

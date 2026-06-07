@@ -28,6 +28,19 @@ export type RenderPollResultOptions = {
   nextPollCommand: string;
 };
 
+export type RenderAutoEnterOptions = {
+  state: WorkspaceState;
+  agent: AgentState;
+  leader?: AgentState;
+  actionableEvents: CodeworkEvent[];
+  nonActionableEvents: CodeworkEvent[];
+  waitSeconds: number;
+  intervalSeconds: number;
+  consecutiveEmptyPolls: number;
+  mode: "new-leader" | "existing-leader" | "new-follower" | "existing-follower";
+  warning?: string;
+};
+
 export function renderGuide(options: RenderGuideOptions): string {
   const agent = findAgent(options.state, options.agentName);
   const agentName = agent?.name ?? options.agentName ?? "(not specified)";
@@ -232,6 +245,35 @@ export function renderPollResult(options: RenderPollResultOptions): string {
   return `${lines.join("\n")}\n`;
 }
 
+export function renderAutoEnter(options: RenderAutoEnterOptions): string {
+  const role = options.agent.leadership === "leader" ? "leader" : "follower engineer";
+  const lines = [
+    "# CODEWORK AUTO-ENTER",
+    "",
+    `WORKSPACE: ${options.state.workspace}`,
+    `WORKSPACE MODE: ${options.state.workspaceKind === "directory" ? "directory-default" : "named"}`,
+    `WORKSPACE ROOT: ${options.state.workspaceRoot}`,
+    `AGENT: ${options.agent.name}`,
+    `ROLE: ${role}`,
+    `FOLLOW: ${options.agent.follow}`,
+    `AUTHORITY MODE: ${authorityMode(options.agent.follow)}`,
+    ...(options.agent.leadership === "leader" ? ["DEFAULT APPLIED: follow=user"] : []),
+    `TIMESTAMP: ${new Date().toISOString()}`
+  ];
+
+  if (options.warning) {
+    lines.push("", "## WARNING", "", `WARNING: ${options.warning}`);
+  }
+
+  if (options.agent.leadership === "leader") {
+    lines.push(...autoEnterLeaderSections(options));
+  } else {
+    lines.push(...autoEnterFollowerSections(options));
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 export function renderLog(workspace: string, events: CodeworkEvent[]): string {
   return [
     "# CODEWORK EVENT LOG",
@@ -394,6 +436,159 @@ function warningLines(state: WorkspaceState): string[] {
     return ["No active warnings."];
   }
   return state.warnings.map((warning) => `- ${warning.code}: ${warning.message} (${warning.createdAt})`);
+}
+
+function autoEnterLeaderSections(options: RenderAutoEnterOptions): string[] {
+  if (options.mode === "new-leader") {
+    return [
+      "",
+      "## WHY YOU ARE LEADER",
+      "",
+      "You are the first participant detected in this directory workspace.",
+      "Codework registered you as the leader for this workspace.",
+      "",
+      "## SAFETY DEFAULT",
+      "",
+      "DEFAULT APPLIED: follow=user",
+      "Reason: Human-led coordination is the safe default. Self-led project ownership must be explicit.",
+      "",
+      "MUST: Treat the human user as the highest visible project authority.",
+      "MUST: Convert vague user requests into concrete implementation directives.",
+      "MUST: Coordinate later agents through Codework events.",
+      "MUST NOT: switch to self-led authority unless the human explicitly requests it.",
+      "",
+      "## NEXT STEPS",
+      "",
+      "MUST: Wait for the human user's project instruction if none has been given yet.",
+      "MUST: When a follower appears, assign work with:",
+      "codework say worker-2 \"...\"",
+      "MUST: Check follower events by running:",
+      "codework",
+      "",
+      "## SHORT COMMANDS",
+      "",
+      "- codework",
+      "- codework status",
+      "- codework say worker-2 \"...\"",
+      "- codework done \"...\""
+    ];
+  }
+
+  if (options.actionableEvents.length > 0) {
+    return [
+      "",
+      "## ACTIONABLE TEAM EVENTS",
+      "",
+      ...structuredEventLines(options.actionableEvents),
+      "",
+      "## LEADER NEXT ACTION",
+      "",
+      "MUST: Handle follower blocker, question, or completion report before assuming team state.",
+      "MUST: If follower work is needed, send a directive with `codework say`.",
+      "MUST NOT: assume follower completion from silence.",
+      "",
+      "NEXT CHECK COMMAND AFTER HANDLING:",
+      "codework"
+    ];
+  }
+
+  return [
+    "",
+    "## NO ACTIONABLE TEAM EVENTS",
+    "",
+    "No follower blocker, question, or completion report arrived during this poll window.",
+    "",
+    "## LEADER NEXT ACTION",
+    "",
+    "MUST: Continue following the human user's current instruction if one exists.",
+    "MUST: If follower work is needed, send a directive with `codework say`.",
+    "MUST: If you are waiting for follower completion, run `codework` again.",
+    "MUST NOT: assume follower completion from silence.",
+    "",
+    "RE-RUN TO CHECK TEAM EVENTS:",
+    "codework"
+  ];
+}
+
+function autoEnterFollowerSections(options: RenderAutoEnterOptions): string[] {
+  const leader = options.leader;
+  const leaderName = leader?.name ?? options.agent.follow;
+  const lines = [
+    "",
+    "## LEADER DETECTED",
+    "",
+    "You have an earlier participant in this workspace.",
+    "That earlier participant is the leader for this directory workspace.",
+    "You are joining as a follower engineer.",
+    "",
+    "Leader:",
+    `- agent: ${leaderName}`,
+    `- follow: ${leader?.follow ?? "user"}`,
+    `- role: ${leader?.role ?? "leader"}`,
+    "",
+    "## FOLLOW RULE",
+    "",
+    `MUST: Follow directives from ${leaderName}.`,
+    "MUST: Poll for instructions before starting implementation.",
+    "MUST NOT: reinterpret the human request independently when a leader exists.",
+    "MUST NOT: start implementation until an actionable event appears or the human directly gives you a new explicit instruction."
+  ];
+
+  if (options.actionableEvents.length > 0) {
+    lines.push(
+      "",
+      "## ACTIONABLE EVENTS",
+      "",
+      ...structuredEventLines(options.actionableEvents),
+      "",
+      "## REQUIRED NEXT ACTION",
+      "",
+      "MUST: Handle the directive above now.",
+      "MUST: Report completion with:",
+      "codework done \"...\"",
+      "MUST: If blocked, report with:",
+      `codework say ${leaderName} --kind=blocker \"...\"`,
+      "MUST NOT: continue polling before handling this directive.",
+      "",
+      "NEXT CHECK COMMAND AFTER HANDLING:",
+      "codework"
+    );
+    return lines;
+  }
+
+  lines.push(
+    "",
+    "## POLL RESULT",
+    "",
+    "No actionable events arrived during this poll window."
+  );
+  if (options.nonActionableEvents.length > 0) {
+    lines.push("", "## OBSERVED NON-ACTIONABLE EVENTS", "", ...structuredEventLines(options.nonActionableEvents));
+  }
+  lines.push(
+    "",
+    "## WAIT CONTINUATION REQUIRED",
+    "",
+    "MUST: Run the exact command below again.",
+    "MUST: Continue repeating it until an actionable event appears, the human gives a new instruction, or you explicitly report that you are still waiting.",
+    "MUST NOT: treat this empty poll as task completion.",
+    "MUST NOT: invent leader state.",
+    "MUST NOT: start unrelated work merely because no event arrived.",
+    "",
+    "RE-RUN EXACT COMMAND:",
+    "codework",
+    "",
+    "## REPORTING RULE",
+    "",
+    "CODEWORK WAITING REPORT:",
+    `- Agent: ${options.agent.name}`,
+    `- Workspace: ${options.state.workspace}`,
+    `- Waiting for: directive or actionable event from ${leaderName}`,
+    `- Consecutive empty polls: ${options.consecutiveEmptyPolls}`,
+    "- Last poll command: codework",
+    "- Next action: run codework again"
+  );
+  return lines;
 }
 
 function waitingForFollowTargetLines(state: WorkspaceState, agent: AgentState | undefined, workspace: string): string[] {

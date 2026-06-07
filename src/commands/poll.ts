@@ -1,7 +1,8 @@
 import process from "node:process";
 
-import { buildCanonicalPollCommand, type PollCommandKind } from "../core/command.ts";
+import { buildCanonicalPollCommand, shellQuote, type PollCommandKind } from "../core/command.ts";
 import { isActionableEvent, readEvents, relevantUnreadEvents } from "../core/events.ts";
+import { resolveAgentNameForCommand } from "../core/identity.ts";
 import { withWorkspaceLock } from "../core/lock.ts";
 import { resolveCodeworkPaths } from "../core/paths.ts";
 import { renderPollResult, type PollRenderResult } from "../core/render.ts";
@@ -10,9 +11,7 @@ import type { AgentState, CodeworkEvent, CommandContext, CommandResult, Workspac
 import {
   CodeworkError,
   parseBoundedSeconds,
-  parsePositiveInteger,
-  required,
-  slugifyIdentifier
+  parsePositiveInteger
 } from "../core/validate.ts";
 
 export type PollCommandOptions = {
@@ -46,29 +45,16 @@ export async function runPollCommand(
   options: PollCommandOptions,
   commandKind: PollCommandKind = "poll"
 ): Promise<CommandResult> {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
   const settings = normalizePollSettings(options);
-  const canonicalCommand = buildCanonicalPollCommand({
-    kind: commandKind,
-    workspace: workspace.value,
-    name,
-    waitSeconds: settings.waitSeconds,
-    intervalSeconds: settings.intervalSeconds
-  });
-  const nextPollCommand = buildCanonicalPollCommand({
-    kind: "poll",
-    workspace: workspace.value,
-    name,
-    waitSeconds: settings.waitSeconds,
-    intervalSeconds: settings.intervalSeconds
-  });
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
+  const name = await resolvePollAgentName(paths.workspaceDir!, ctx);
+  const canonicalCommand = canonicalPollCommand(commandKind, ctx, paths.workspace ?? "workspace", name, settings);
+  const nextPollCommand = canonicalPollCommand("poll", ctx, paths.workspace ?? "workspace", name, settings);
 
   const startedAt = Date.now();
   let readResult: PollReadResult;
@@ -119,6 +105,38 @@ export async function runPollCommand(
       canonicalCommand
     }
   };
+}
+
+async function resolvePollAgentName(workspaceDir: string, ctx: CommandContext): Promise<string> {
+  return withWorkspaceLock(workspaceDir, async () => {
+    const state = await requireState({ workspaceDir, cwd: "", root: "", home: "" });
+    return resolveAgentNameForCommand(state, ctx);
+  });
+}
+
+function canonicalPollCommand(
+  kind: PollCommandKind,
+  ctx: CommandContext,
+  workspace: string,
+  name: string,
+  settings: PollSettings
+): string {
+  if (!ctx.workspace && !ctx.name) {
+    return `codework ${kind} --wait=${settings.waitSeconds} --interval=${settings.intervalSeconds}`;
+  }
+  if (!ctx.workspace) {
+    return `codework ${kind} --name=${shellQuote(name)} --wait=${settings.waitSeconds} --interval=${settings.intervalSeconds}`;
+  }
+  if (!ctx.name) {
+    return `codework ${kind} --workspace=${shellQuote(ctx.workspace)} --wait=${settings.waitSeconds} --interval=${settings.intervalSeconds}`;
+  }
+  return buildCanonicalPollCommand({
+    kind,
+    workspace,
+    name,
+    waitSeconds: settings.waitSeconds,
+    intervalSeconds: settings.intervalSeconds
+  });
 }
 
 function normalizePollSettings(options: PollCommandOptions): PollSettings {

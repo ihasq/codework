@@ -40,8 +40,13 @@ export async function runJoinCommand(ctx: CommandContext, options: JoinCommandOp
       name: name.value,
       follow,
       role: options.role,
-      cursorEventId: rejoinCursorSeed(stateHasAgent(state, name.slug), existingLatest)
+      cursorEventId: rejoinCursorSeed(stateHasAgent(state, name.slug), existingLatest),
+      autoNamed: false,
+      leadership: follow === "user" && !state.leaderAgent ? "leader" : "follower"
     });
+    if (agent.leadership === "leader" && !state.leaderAgent) {
+      state.leaderAgent = agent.name;
+    }
     const events: CodeworkEvent[] = [
       createEvent(state, {
         actor: agent.name,
@@ -50,6 +55,7 @@ export async function runJoinCommand(ctx: CommandContext, options: JoinCommandOp
           name: agent.name,
           role: agent.role,
           follow: agent.follow,
+          leadership: agent.leadership,
           sessionCount: agent.sessionCount,
           rejoin
         }

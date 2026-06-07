@@ -1,12 +1,14 @@
 import { appendEvents, readEvents, relevantUnreadEvents } from "../core/events.ts";
+import { identityRequiredStdout, resolveAgentNameForCommand } from "../core/identity.ts";
 import { withWorkspaceLock } from "../core/lock.ts";
 import { resolveCodeworkPaths } from "../core/paths.ts";
 import { renderGuide } from "../core/render.ts";
-import { createEvent, findAgent, latestEventId, requireState, saveState, touchAgent } from "../core/state.ts";
+import { createEvent, findAgent, latestEventId, loadState, saveState, touchAgent } from "../core/state.ts";
 import type { CommandContext, CommandResult } from "../core/types.ts";
-import { CodeworkError, required, slugifyIdentifier, validateTextSize } from "../core/validate.ts";
+import { CodeworkError, validateTextSize } from "../core/validate.ts";
 
 export type DoneCommandOptions = {
+  positionalSummary?: string;
   summary?: string;
   tests?: string;
   changed?: string;
@@ -15,9 +17,7 @@ export type DoneCommandOptions = {
 };
 
 export async function runDoneCommand(ctx: CommandContext, options: DoneCommandOptions): Promise<CommandResult> {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
-  const summary = validateTextSize(options.summary, "--summary");
+  const summary = validateTextSize(options.summary ?? options.positionalSummary, "--summary");
   const payload = {
     summary,
     tests: optionalText(options.tests, "--tests"),
@@ -28,12 +28,19 @@ export async function runDoneCommand(ctx: CommandContext, options: DoneCommandOp
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
 
   return withWorkspaceLock(paths.workspaceDir!, async () => {
-    const state = await requireState(paths);
+    const state = await loadState(paths.workspaceDir!);
+    if (!state) {
+      if (!ctx.name) {
+        throw new CodeworkError(2, "Agent identity is required.", identityRequiredStdout());
+      }
+      throw new CodeworkError(2, `Workspace does not exist: ${paths.workspace ?? "(unknown)"}`);
+    }
+    const name = resolveAgentNameForCommand(state, ctx);
     const agent = findAgent(state, name);
     if (!agent) {
       throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
@@ -59,10 +66,11 @@ export async function runDoneCommand(ctx: CommandContext, options: DoneCommandOp
         allEvents: events,
         notice: [
           `Work report recorded as event ${event.id}.`,
+          options.tests ? "Tests field was separately provided." : "Tests field was not separately provided.",
           "Notify your follow target if the report changes their next step.",
-          `Run \`codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2\` before the next substantial step.`
+          `Run \`codework\` or \`codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2\` before the next substantial step.`
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
+        recommendedCommand: `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} done\n`,
       json: {

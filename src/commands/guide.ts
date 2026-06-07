@@ -1,20 +1,20 @@
 import { readEvents, relevantUnreadEvents } from "../core/events.ts";
+import { resolveAgentNameForCommand } from "../core/identity.ts";
 import { resolveCodeworkPaths } from "../core/paths.ts";
 import { renderGuide } from "../core/render.ts";
 import { findAgent, requireState } from "../core/state.ts";
 import type { CommandContext, CommandResult } from "../core/types.ts";
-import { CodeworkError, required, slugifyIdentifier } from "../core/validate.ts";
+import { CodeworkError } from "../core/validate.ts";
 
 export async function runGuideCommand(ctx: CommandContext): Promise<CommandResult> {
-  const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
-  const name = required(ctx.name, "--name");
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
-    workspace: workspace.value,
+    workspace: ctx.workspace,
     debug: ctx.debug
   });
   const state = await requireState(paths);
+  const name = resolveAgentNameForCommand(state, ctx);
   const agent = findAgent(state, name);
   if (!agent) {
     throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
@@ -29,9 +29,9 @@ export async function runGuideCommand(ctx: CommandContext): Promise<CommandResul
       unreadEvents: unread,
       allEvents: events,
       notice: ["Full guide reprinted for the calling agent."],
-      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
+      recommendedCommand: `codework poll --workspace=${state.workspace} --name=${agent.name} --wait=30 --interval=2`
     }),
-    quietText: `workspace=${workspace.value} agent=${agent.name} guide\n`,
+    quietText: `workspace=${state.workspace} agent=${agent.name} guide\n`,
     json: {
       ok: true,
       command: "guide",

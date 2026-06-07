@@ -2,11 +2,13 @@ import type { ExitCode, MessageKind, OutputFormat } from "./types.ts";
 
 export class CodeworkError extends Error {
   readonly exitCode: ExitCode;
+  readonly stdout?: string;
 
-  constructor(exitCode: ExitCode, message: string) {
+  constructor(exitCode: ExitCode, message: string, stdout?: string) {
     super(message);
     this.name = "CodeworkError";
     this.exitCode = exitCode;
+    this.stdout = stdout;
   }
 }
 

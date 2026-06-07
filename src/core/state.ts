@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 import type { AgentState, CodeworkEvent, CodeworkPaths, EventType, MessageKind, WorkspaceState } from "./types.ts";
+import { migrateWorkspaceState } from "./migrate.ts";
 import { CodeworkError, slugifyIdentifier } from "./validate.ts";
 
 export function nowIso(): string {
@@ -36,7 +37,7 @@ async function writeTextAtomic(filePath: string, value: string): Promise<void> {
 export async function loadState(workspaceDir: string): Promise<WorkspaceState | undefined> {
   try {
     const raw = await readFile(stateFilePath(workspaceDir), "utf8");
-    return JSON.parse(raw) as WorkspaceState;
+    return migrateWorkspaceState(JSON.parse(raw));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
@@ -80,9 +81,11 @@ export function createWorkspaceState(paths: CodeworkPaths, workspace: string): W
   }
   const ts = nowIso();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     workspace,
     workspaceSlug: paths.workspaceSlug,
+    workspaceKind: paths.workspaceKind ?? "named",
+    workspaceRoot: paths.workspaceRoot ?? paths.root,
     createdAt: ts,
     updatedAt: ts,
     root: paths.root,
@@ -94,7 +97,16 @@ export function createWorkspaceState(paths: CodeworkPaths, workspace: string): W
 
 export function addOrRejoinAgent(
   state: WorkspaceState,
-  input: { name: string; follow: string; role?: string; cursorEventId?: number }
+  input: {
+    name: string;
+    follow: string;
+    role?: string;
+    cursorEventId?: number;
+    fingerprintHash?: string;
+    fingerprintSource?: string;
+    autoNamed?: boolean;
+    leadership?: "leader" | "follower";
+  }
 ): { agent: AgentState; rejoin: boolean } {
   const slugged = slugifyIdentifier(input.name, "--name");
   const existing = state.agents[slugged.slug];
@@ -106,6 +118,10 @@ export function addOrRejoinAgent(
     existing.lastSeenAt = ts;
     existing.active = true;
     existing.sessionCount += 1;
+    existing.fingerprintHash = input.fingerprintHash ?? existing.fingerprintHash;
+    existing.fingerprintSource = input.fingerprintSource ?? existing.fingerprintSource;
+    existing.autoNamed = input.autoNamed ?? existing.autoNamed;
+    existing.leadership = input.leadership ?? existing.leadership;
     if (input.cursorEventId !== undefined) {
       existing.cursorEventId = input.cursorEventId;
     }
@@ -122,11 +138,20 @@ export function addOrRejoinAgent(
     lastSeenAt: ts,
     active: true,
     sessionCount: 1,
-    cursorEventId: input.cursorEventId ?? 0
+    cursorEventId: input.cursorEventId ?? 0,
+    fingerprintHash: input.fingerprintHash,
+    fingerprintSource: input.fingerprintSource,
+    autoNamed: input.autoNamed,
+    joinOrder: nextJoinOrder(state),
+    leadership: input.leadership ?? "follower"
   };
   state.agents[agent.slug] = agent;
   state.updatedAt = ts;
   return { agent, rejoin: false };
+}
+
+export function nextJoinOrder(state: WorkspaceState): number {
+  return Math.max(0, ...Object.values(state.agents).map((agent) => agent.joinOrder ?? 0)) + 1;
 }
 
 export function findAgent(state: WorkspaceState, name: string | undefined): AgentState | undefined {
