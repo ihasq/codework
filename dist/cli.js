@@ -2,7 +2,9 @@
 
 // src/cli.ts
 import { Command, CommanderError } from "commander";
+import { realpathSync } from "fs";
 import process5 from "process";
+import { fileURLToPath } from "url";
 
 // src/args.ts
 var KEY_VALUE_ARG = /^([a-z][a-z0-9-]*)=(.*)$/;
@@ -1483,9 +1485,21 @@ function requestedFormat(argv) {
   }
   return "text";
 }
-if (import.meta.url === `file://${process5.argv[1]}`) {
+if (isDirectRun()) {
   const code = await main();
   process5.exit(code);
+}
+function isDirectRun() {
+  const argvPath = process5.argv[1];
+  if (!argvPath) {
+    return false;
+  }
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(modulePath) === realpathSync(argvPath);
+  } catch {
+    return modulePath === argvPath;
+  }
 }
 export {
   main

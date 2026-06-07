@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Command, CommanderError } from "commander";
+import { realpathSync } from "node:fs";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { preprocessArgv } from "./args.ts";
 import { runDoctorCommand } from "./commands/doctor.ts";
@@ -240,7 +242,21 @@ function requestedFormat(argv: string[]): "text" | "json" {
   return "text";
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRun()) {
   const code = await main();
   process.exit(code);
+}
+
+function isDirectRun(): boolean {
+  const argvPath = process.argv[1];
+  if (!argvPath) {
+    return false;
+  }
+
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(modulePath) === realpathSync(argvPath);
+  } catch {
+    return modulePath === argvPath;
+  }
 }
