@@ -29,7 +29,7 @@ export async function runGuideCommand(ctx: CommandContext): Promise<CommandResul
       unreadEvents: unread,
       allEvents: events,
       notice: ["Full guide reprinted for the calling agent."],
-      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
     }),
     quietText: `workspace=${workspace.value} agent=${agent.name} guide\n`,
     json: {

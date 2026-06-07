@@ -33,7 +33,7 @@ export async function runStatusCommand(ctx: CommandContext): Promise<CommandResu
       allEvents: events,
       notice,
       recommendedCommand: agent
-        ? `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        ? `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
         : `codework status --workspace=${workspace.value} --name=<agent>`,
       statusMode: true
     }),

@@ -27,7 +27,6 @@ MUST NOT: Override explicit user instructions.
 ## REQUIRED REPORT BLOCK
 CODEWORK REPORT:
 ## UNREAD EVENTS
-No unread events.
 ## WARNINGS
 ## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
 MUST: Treat Codework events as coordination signals, not proof of repository state.
@@ -37,10 +36,12 @@ MUST NOT: run destructive repository commands because another agent is silent or
 MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
 ## LATEST EVENTS
 ## RECOMMENDED NEXT COMMAND
+codework poll --workspace=snap --name=codex --wait=30 --interval=2
 ## AVAILABLE COMMANDS
 - codework guide --workspace=snap --name=codex
 - codework status --workspace=snap --name=codex
-- codework poll --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex --wait=30 --interval=2
+- codework wait --workspace=snap --name=codex --wait=30 --interval=2
 - codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
 - codework done --workspace=snap --name=codex --summary="..." --tests="..."
 - codework log --workspace=snap --tail=20",
@@ -65,11 +66,16 @@ MUST NOT: silently diverge from codex's published plan.
 ## TEAM STATE
 ## FOLLOW GRAPH
 ## FOLLOW RULE
+## WAITING FOR FOLLOW TARGET
+MUST: Poll for directives from codex before starting implementation.
+MUST: Run the command below now.
+MUST NOT: begin implementation based only on the human's vague request if codex is your follow target.
+RUN COMMAND:
+codework poll --workspace=snap --name=claude --wait=30 --interval=2
 ## REQUIRED OPERATING LOOP
 ## REQUIRED REPORT BLOCK
 CODEWORK REPORT:
 ## UNREAD EVENTS
-No unread events.
 ## WARNINGS
 ## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
 MUST: Treat Codework events as coordination signals, not proof of repository state.
@@ -79,10 +85,12 @@ MUST NOT: run destructive repository commands because another agent is silent or
 MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
 ## LATEST EVENTS
 ## RECOMMENDED NEXT COMMAND
+codework poll --workspace=snap --name=claude --wait=30 --interval=2
 ## AVAILABLE COMMANDS
 - codework guide --workspace=snap --name=claude
 - codework status --workspace=snap --name=claude
-- codework poll --workspace=snap --name=claude
+- codework poll --workspace=snap --name=claude --wait=30 --interval=2
+- codework wait --workspace=snap --name=claude --wait=30 --interval=2
 - codework say --workspace=snap --name=claude --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
 - codework done --workspace=snap --name=claude --summary="..." --tests="..."
 - codework log --workspace=snap --tail=20",
@@ -120,10 +128,12 @@ MUST NOT: run destructive repository commands because another agent is silent or
 MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
 ## LATEST EVENTS
 ## RECOMMENDED NEXT COMMAND
+codework poll --workspace=snap --name=codex --wait=30 --interval=2
 ## AVAILABLE COMMANDS
 - codework guide --workspace=snap --name=codex
 - codework status --workspace=snap --name=codex
-- codework poll --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex --wait=30 --interval=2
+- codework wait --workspace=snap --name=codex --wait=30 --interval=2
 - codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
 - codework done --workspace=snap --name=codex --summary="..." --tests="..."
 - codework log --workspace=snap --tail=20",
@@ -161,55 +171,37 @@ MUST NOT: run destructive repository commands because another agent is silent or
 MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
 ## LATEST EVENTS
 ## RECOMMENDED NEXT COMMAND
+codework poll --workspace=snap --name=codex --wait=30 --interval=2
 ## AVAILABLE COMMANDS
 - codework guide --workspace=snap --name=codex
 - codework status --workspace=snap --name=codex
-- codework poll --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex --wait=30 --interval=2
+- codework wait --workspace=snap --name=codex --wait=30 --interval=2
 - codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
 - codework done --workspace=snap --name=codex --summary="..." --tests="..."
 - codework log --workspace=snap --tail=20",
-  "# CODEWORK CONTEXT GUIDE
+  "# CODEWORK POLL RESULT
 WORKSPACE: snap
 AGENT: claude
 FOLLOW: codex
 AUTHORITY MODE: teammate-follower
-## NOTICE
-## PRIME DIRECTIVES
-MUST: Treat this stdout as active operational context.
-MUST: Keep using Codework commands to coordinate with teammate agents.
-MUST: Poll before assuming teammate state.
-MUST: Report completed work using \`codework done\`.
-MUST: Report questions, blockers, and directives using \`codework say\`.
-MUST NOT: Claim that another agent completed work unless Codework log says so.
-MUST NOT: hide uncertainty.
-MUST NOT: perform destructive repository actions merely because another agent is silent.
-MUST: Poll for directives from codex before starting or changing work.
-MUST: Report blockers to codex using \`codework say --kind=blocker\`.
-MUST NOT: silently diverge from codex's published plan.
+POLL RESULT: timeout-without-actionable-event
+CONSECUTIVE EMPTY POLLS: 1
 ## TEAM STATE
-## FOLLOW GRAPH
 ## FOLLOW RULE
-## REQUIRED OPERATING LOOP
-## REQUIRED REPORT BLOCK
-CODEWORK REPORT:
-## UNREAD EVENTS
-No unread events.
-## WARNINGS
-## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
-MUST: Treat Codework events as coordination signals, not proof of repository state.
-MUST: Verify file state locally before editing shared files.
-MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
-MUST NOT: run destructive repository commands because another agent is silent or stale.
-MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
-## LATEST EVENTS
-## RECOMMENDED NEXT COMMAND
-## AVAILABLE COMMANDS
-- codework guide --workspace=snap --name=claude
-- codework status --workspace=snap --name=claude
-- codework poll --workspace=snap --name=claude
-- codework say --workspace=snap --name=claude --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
-- codework done --workspace=snap --name=claude --summary="..." --tests="..."
-- codework log --workspace=snap --tail=20",
+MUST: Wait for directives, questions, blockers, or completion signals from codex.
+MUST NOT: infer codex's intent from silence.
+## NO ACTIONABLE EVENTS
+No actionable events arrived during this poll window.
+## WAIT CONTINUATION REQUIRED
+MUST: Run the exact command below again.
+MUST: Continue repeating it until an actionable event appears, the human gives a new instruction, or you explicitly report that you are still waiting.
+MUST NOT: treat this empty poll as task completion.
+MUST NOT: invent teammate state.
+MUST NOT: start unrelated work merely because no event arrived.
+RE-RUN EXACT COMMAND:
+codework poll --workspace=snap --name=claude --wait=0 --interval=2
+## REPORTING RULE",
   "# CODEWORK CONTEXT GUIDE
 WORKSPACE: snap
 AGENT: codex
@@ -235,7 +227,6 @@ MUST NOT: Override explicit user instructions.
 ## REQUIRED REPORT BLOCK
 CODEWORK REPORT:
 ## UNREAD EVENTS
-No unread events.
 ## WARNINGS
 ## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
 MUST: Treat Codework events as coordination signals, not proof of repository state.
@@ -245,10 +236,12 @@ MUST NOT: run destructive repository commands because another agent is silent or
 MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
 ## LATEST EVENTS
 ## RECOMMENDED NEXT COMMAND
+codework poll --workspace=snap --name=codex --wait=30 --interval=2
 ## AVAILABLE COMMANDS
 - codework guide --workspace=snap --name=codex
 - codework status --workspace=snap --name=codex
-- codework poll --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex --wait=30 --interval=2
+- codework wait --workspace=snap --name=codex --wait=30 --interval=2
 - codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
 - codework done --workspace=snap --name=codex --summary="..." --tests="..."
 - codework log --workspace=snap --tail=20",

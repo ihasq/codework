@@ -89,3 +89,26 @@ export function parsePositiveInteger(value: string | undefined, optionName: stri
   }
   return parsed;
 }
+
+export function parseBoundedSeconds(input: {
+  cliValue?: string;
+  envValue?: string;
+  optionName: string;
+  fallback: number;
+  min: number;
+  max: number;
+}): number {
+  const value = input.cliValue ?? input.envValue;
+  if (value === undefined || value.trim() === "") {
+    return input.fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < input.min || parsed > input.max) {
+    throw new CodeworkError(
+      2,
+      `Invalid ${input.optionName}: expected seconds between ${input.min} and ${input.max}.`
+    );
+  }
+  return parsed;
+}

@@ -93,7 +93,7 @@ export async function runNewCommand(ctx: CommandContext, options: NewCommandOpti
         `Agent registered: ${agent.name}.`,
         "This agent must keep using Codework commands for coordination."
       ],
-      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
     });
 
     return {

@@ -15,6 +15,7 @@ import { runNewCommand, requireNewOptions } from "./commands/new.ts";
 import { runPollCommand } from "./commands/poll.ts";
 import { runSayCommand } from "./commands/say.ts";
 import { runStatusCommand } from "./commands/status.ts";
+import { runWaitCommand } from "./commands/wait.ts";
 import type { CommandContext, CommandResult, ExitCode } from "./core/types.ts";
 import { CodeworkError, validateFormat } from "./core/validate.ts";
 
@@ -113,10 +114,23 @@ function buildProgram(io: Io): Command {
   );
 
   addCommonOptions(program.command("poll").description("Read unread events for the calling agent."))
+    .option("--wait <seconds>", "Maximum seconds to wait for new actionable events.")
+    .option("--interval <seconds>", "Seconds between event log checks.")
     .option("--since <eventId>", "Read events after this event id.")
     .option("--tail <n>", "Limit unread events.")
+    .option("--once", "Read once without waiting.")
     .action(async function (this: Command) {
       await emitResult(io, contextFrom(this), await runPollCommand(contextFrom(this), this.opts()));
+    });
+
+  addCommonOptions(program.command("wait").description("Wait for actionable events for the calling agent."))
+    .option("--wait <seconds>", "Maximum seconds to wait for new actionable events.")
+    .option("--interval <seconds>", "Seconds between event log checks.")
+    .option("--since <eventId>", "Read events after this event id.")
+    .option("--tail <n>", "Limit unread events.")
+    .option("--once", "Read once without waiting.")
+    .action(async function (this: Command) {
+      await emitResult(io, contextFrom(this), await runWaitCommand(contextFrom(this), this.opts()));
     });
 
   addCommonOptions(program.command("say").description("Post a message event to the workspace."))

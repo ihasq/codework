@@ -34,6 +34,9 @@ export type AgentState = {
   active: boolean;
   sessionCount: number;
   cursorEventId: number;
+  lastPollAt?: string;
+  lastPollEmptyCount?: number;
+  lastPollCommand?: string;
 };
 
 export type WorkspaceWarning = {

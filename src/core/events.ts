@@ -58,9 +58,22 @@ export function relevantUnreadEvents(
   const cursor = since ?? agent.cursorEventId;
   return events
     .filter((event) => event.id > cursor)
-    .filter((event) => targetMatchesAgent(event.to, agent))
+    .filter((event) => targetMatchesAgent(event.to, agent) || event.actor === agent.follow)
     .filter((event) => !isOwnOperationalEvent(event, agent))
     .sort((a, b) => priorityForEvent(state, agent, b) - priorityForEvent(state, agent, a) || a.id - b.id);
+}
+
+export function isActionableEvent(event: CodeworkEvent, agent: AgentState): boolean {
+  if (event.type === "warning.created") {
+    return true;
+  }
+  if (event.type === "message.posted") {
+    return event.kind === "directive" || event.kind === "question" || event.kind === "blocker";
+  }
+  if (event.type === "work.done") {
+    return agent.follow !== "user" && agent.follow !== "self" && event.actor === agent.follow;
+  }
+  return false;
 }
 
 function priorityForEvent(state: WorkspaceState, agent: AgentState, event: CodeworkEvent): number {

@@ -69,7 +69,7 @@ export async function runSayCommand(ctx: CommandContext, options: SayCommandOpti
               ? "Blocker messages are visible to all agents."
               : "Message is available through Codework poll/status/log."
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} kind=${kind} to=${to}\n`,
       json: {

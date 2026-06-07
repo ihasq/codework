@@ -90,7 +90,7 @@ export async function runJoinCommand(ctx: CommandContext, options: JoinCommandOp
         unreadEvents: unread,
         allEvents,
         notice,
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `workspace=${workspace.value} agent=${agent.name} joined\n`,
       json: {

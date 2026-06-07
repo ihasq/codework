@@ -3,7 +3,7 @@
 // src/cli.ts
 import { Command, CommanderError } from "commander";
 import { realpathSync } from "fs";
-import process5 from "process";
+import process6 from "process";
 import { fileURLToPath } from "url";
 
 // src/args.ts
@@ -105,6 +105,20 @@ function parsePositiveInteger(value, optionName, fallback) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 0 || String(parsed) !== String(value)) {
     throw new CodeworkError(2, `Invalid ${optionName}: expected a non-negative integer.`);
+  }
+  return parsed;
+}
+function parseBoundedSeconds(input) {
+  const value = input.cliValue ?? input.envValue;
+  if (value === void 0 || value.trim() === "") {
+    return input.fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < input.min || parsed > input.max) {
+    throw new CodeworkError(
+      2,
+      `Invalid ${input.optionName}: expected seconds between ${input.min} and ${input.max}.`
+    );
   }
   return parsed;
 }
@@ -313,7 +327,19 @@ function isOwnOperationalEvent(event, agent) {
 }
 function relevantUnreadEvents(state, events, agent, since) {
   const cursor = since ?? agent.cursorEventId;
-  return events.filter((event) => event.id > cursor).filter((event) => targetMatchesAgent(event.to, agent)).filter((event) => !isOwnOperationalEvent(event, agent)).sort((a, b) => priorityForEvent(state, agent, b) - priorityForEvent(state, agent, a) || a.id - b.id);
+  return events.filter((event) => event.id > cursor).filter((event) => targetMatchesAgent(event.to, agent) || event.actor === agent.follow).filter((event) => !isOwnOperationalEvent(event, agent)).sort((a, b) => priorityForEvent(state, agent, b) - priorityForEvent(state, agent, a) || a.id - b.id);
+}
+function isActionableEvent(event, agent) {
+  if (event.type === "warning.created") {
+    return true;
+  }
+  if (event.type === "message.posted") {
+    return event.kind === "directive" || event.kind === "question" || event.kind === "blocker";
+  }
+  if (event.type === "work.done") {
+    return agent.follow !== "user" && agent.follow !== "self" && event.actor === agent.follow;
+  }
+  return false;
 }
 function priorityForEvent(state, agent, event) {
   const follow = agent.follow;
@@ -340,11 +366,6 @@ function latestEvents(events, tail) {
     return [];
   }
   return events.slice(Math.max(0, events.length - tail));
-}
-function advanceCursorToLatest(state, agent) {
-  agent.cursorEventId = latestEventId(state);
-  agent.lastSeenAt = (/* @__PURE__ */ new Date()).toISOString();
-  state.updatedAt = agent.lastSeenAt;
 }
 function formatEvent(event) {
   const parts = [
@@ -481,13 +502,34 @@ function resolveCodeworkPaths(options) {
   };
 }
 
+// src/core/command.ts
+function shellQuote(value) {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+function buildCanonicalPollCommand(input) {
+  return [
+    "codework",
+    input.kind,
+    `--workspace=${shellQuote(input.workspace)}`,
+    `--name=${shellQuote(input.name)}`,
+    `--wait=${formatSeconds(input.waitSeconds)}`,
+    `--interval=${formatSeconds(input.intervalSeconds)}`
+  ].join(" ");
+}
+function formatSeconds(value) {
+  return Number.isInteger(value) ? String(value) : String(value);
+}
+
 // src/core/render.ts
 function renderGuide(options) {
   const agent = findAgent(options.state, options.agentName);
   const agentName = agent?.name ?? options.agentName ?? "(not specified)";
   const follow = agent?.follow ?? "(none)";
   const workspace = options.state.workspace;
-  const recommendedCommand = options.recommendedCommand ?? (agent ? `codework poll --workspace=${workspace} --name=${agent.name}` : `codework status --workspace=${workspace}`);
+  const recommendedCommand = options.recommendedCommand ?? (agent ? defaultPollCommand(workspace, agent.name) : `codework status --workspace=${workspace}`);
   const lines = [
     "# CODEWORK CONTEXT GUIDE",
     "",
@@ -527,10 +569,11 @@ function renderGuide(options) {
     `You currently follow: ${follow}.`,
     "Interpretation:",
     ...followInterpretationLines(options.state, follow),
+    ...waitingForFollowTargetLines(options.state, agent, workspace),
     "",
     "## REQUIRED OPERATING LOOP",
     "",
-    `1. Run \`codework poll --workspace=${workspace} --name=${agentName}\` before starting a new substantial step.`,
+    `1. Run \`${agent ? defaultPollCommand(workspace, agent.name) : `codework poll --workspace=${workspace} --name=${agentName} --wait=30 --interval=2`}\` before starting a new substantial step.`,
     "2. Read blockers first.",
     "3. If you need another agent, post a directive:",
     `   \`codework say --workspace=${workspace} --name=${agentName} --to=<agent> --kind=directive --message="..."\``,
@@ -553,7 +596,7 @@ function renderGuide(options) {
     "",
     "## UNREAD EVENTS",
     "",
-    ...eventLines(options.unreadEvents, "No unread events."),
+    ...eventLines(options.unreadEvents, "No actionable unread events are shown here. Use the poll command below to wait for peer events."),
     "",
     "## WARNINGS",
     "",
@@ -579,11 +622,99 @@ function renderGuide(options) {
     "",
     `- codework guide --workspace=${workspace} --name=${agentName}`,
     `- codework status --workspace=${workspace} --name=${agentName}`,
-    `- codework poll --workspace=${workspace} --name=${agentName}`,
+    `- codework poll --workspace=${workspace} --name=${agentName} --wait=30 --interval=2`,
+    `- codework wait --workspace=${workspace} --name=${agentName} --wait=30 --interval=2`,
     `- codework say --workspace=${workspace} --name=${agentName} --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."`,
     `- codework done --workspace=${workspace} --name=${agentName} --summary="..." --tests="..."`,
     `- codework log --workspace=${workspace} --tail=20`
   );
+  return `${lines.join("\n")}
+`;
+}
+function renderPollResult(options) {
+  const follow = options.agent.follow;
+  const lines = [
+    options.title,
+    "",
+    `WORKSPACE: ${options.state.workspace}`,
+    `AGENT: ${options.agent.name}`,
+    `FOLLOW: ${follow}`,
+    `AUTHORITY MODE: ${authorityMode(follow)}`,
+    `TIMESTAMP: ${(/* @__PURE__ */ new Date()).toISOString()}`,
+    `POLL WINDOW: ${formatPollSeconds(options.waitSeconds)}`,
+    `POLL INTERVAL: ${formatPollSeconds(options.intervalSeconds)}`,
+    `POLL RESULT: ${options.pollResult}`,
+    `CONSECUTIVE EMPTY POLLS: ${options.agent.lastPollEmptyCount ?? 0}`,
+    "",
+    "## TEAM STATE",
+    "",
+    ...teamStateLines(options.state),
+    "",
+    "## FOLLOW RULE",
+    "",
+    `You currently follow: ${follow}.`,
+    ...pollFollowRuleLines(follow)
+  ];
+  if (options.actionableEvents.length > 0) {
+    lines.push(
+      "",
+      "## ACTIONABLE EVENTS",
+      "",
+      ...structuredEventLines(options.actionableEvents),
+      "",
+      "## REQUIRED NEXT ACTION",
+      "",
+      "MUST: Handle the actionable event above before polling again.",
+      follow !== "user" && follow !== "self" ? `MUST: Follow directives from ${follow} because your follow target is ${follow}.` : "MUST: Apply the actionable event according to your authority mode and the human's current instruction.",
+      `MUST: If blocked, send \`codework say --workspace=${options.state.workspace} --name=${options.agent.name} --to=${followTargetForCommand(follow)} --kind=blocker --message="..."\``,
+      `MUST: If complete, send \`codework done --workspace=${options.state.workspace} --name=${options.agent.name} --summary="..." --tests="..."\``,
+      "MUST NOT: ignore this directive and continue waiting.",
+      "",
+      "NEXT POLL COMMAND AFTER HANDLING:",
+      options.nextPollCommand
+    );
+  } else {
+    lines.push(
+      "",
+      "## NO ACTIONABLE EVENTS",
+      "",
+      "No actionable events arrived during this poll window."
+    );
+    if (options.nonActionableEvents.length > 0) {
+      lines.push(
+        "",
+        "## OBSERVED NON-ACTIONABLE EVENTS",
+        "",
+        ...structuredEventLines(options.nonActionableEvents)
+      );
+    }
+    lines.push(
+      "",
+      "## WAIT CONTINUATION REQUIRED",
+      "",
+      "STATE: waiting-for-peer-event",
+      "MUST: Run the exact command below again.",
+      "MUST: Continue repeating it until an actionable event appears, the human gives a new instruction, or you explicitly report that you are still waiting.",
+      "MUST NOT: treat this empty poll as task completion.",
+      "MUST NOT: invent teammate state.",
+      "MUST NOT: start unrelated work merely because no event arrived.",
+      "",
+      "RE-RUN EXACT COMMAND:",
+      options.canonicalCommand,
+      "",
+      "## REPORTING RULE",
+      "",
+      "If you decide to speak to the human while still waiting, use this exact report shape:",
+      "",
+      "CODEWORK WAITING REPORT:",
+      `- Agent: ${options.agent.name}`,
+      `- Workspace: ${options.state.workspace}`,
+      `- Waiting for: ${waitingForText(follow)}`,
+      `- Consecutive empty polls: ${options.agent.lastPollEmptyCount ?? 0}`,
+      `- Last poll command: ${options.canonicalCommand}`,
+      "- Next action: run the same poll command again"
+    );
+  }
   return `${lines.join("\n")}
 `;
 }
@@ -685,7 +816,8 @@ function teamStateLines(state) {
   }
   return agents.map((agent) => {
     const active = agent.active ? "active" : "inactive";
-    return `- ${agent.name}: ${active}, follow=${agent.follow}, role=${agent.role ?? "(none)"}, lastSeen=${agent.lastSeenAt}, sessions=${agent.sessionCount}, cursor=${agent.cursorEventId}`;
+    const poll = agent.lastPollAt ? `, lastPoll=${agent.lastPollAt}, emptyPolls=${agent.lastPollEmptyCount ?? 0}` : "";
+    return `- ${agent.name}: ${active}, follow=${agent.follow}, role=${agent.role ?? "(none)"}, lastSeen=${agent.lastSeenAt}, sessions=${agent.sessionCount}, cursor=${agent.cursorEventId}${poll}`;
   });
 }
 function followGraphLines(state) {
@@ -731,6 +863,96 @@ function warningLines(state) {
     return ["No active warnings."];
   }
   return state.warnings.map((warning) => `- ${warning.code}: ${warning.message} (${warning.createdAt})`);
+}
+function waitingForFollowTargetLines(state, agent, workspace) {
+  if (!agent || agent.follow === "user" || agent.follow === "self") {
+    return [];
+  }
+  const command = defaultPollCommand(workspace, agent.name);
+  return [
+    "",
+    "## WAITING FOR FOLLOW TARGET",
+    "",
+    `STATE: waiting-for-directive-from-${agent.follow}`,
+    `MUST: Poll for directives from ${agent.follow} before starting implementation.`,
+    "MUST: Run the command below now.",
+    `MUST NOT: begin implementation based only on the human's vague request if ${agent.follow} is your follow target.`,
+    "",
+    "RUN COMMAND:",
+    command,
+    "",
+    findAgentByFollowValue(state, agent.follow) ? `FOLLOW TARGET STATUS: ${agent.follow} is registered.` : `FOLLOW TARGET STATUS: ${agent.follow} is not registered yet; keep polling until directives arrive.`
+  ];
+}
+function defaultPollCommand(workspace, name) {
+  return buildCanonicalPollCommand({
+    kind: "poll",
+    workspace,
+    name,
+    waitSeconds: 30,
+    intervalSeconds: 2
+  });
+}
+function pollFollowRuleLines(follow) {
+  if (follow === "user") {
+    return [
+      "MUST: Wait for directives, questions, blockers, or completion signals from the workspace.",
+      "MUST NOT: infer teammate state from silence."
+    ];
+  }
+  if (follow === "self") {
+    return [
+      "MUST: Wait for actionable peer events before making claims about teammate progress.",
+      "MUST NOT: infer teammate state from silence."
+    ];
+  }
+  return [
+    `MUST: Wait for directives, questions, blockers, or completion signals from ${follow}.`,
+    `MUST NOT: infer ${follow}'s intent from silence.`
+  ];
+}
+function structuredEventLines(events) {
+  return events.flatMap((event) => {
+    const lines = [
+      `Event ${event.id}:`,
+      `- TYPE: ${event.type}`,
+      `- FROM: ${event.actor}`,
+      `- TO: ${event.to ?? "all"}`
+    ];
+    if (event.kind) {
+      lines.push(`- KIND: ${event.kind}`);
+    }
+    const message = eventText(event);
+    if (message !== "") {
+      lines.push("- MESSAGE:", ...indentMultiline(message));
+    }
+    return [...lines, ""];
+  }).slice(0, -1);
+}
+function eventText(event) {
+  const keys = ["message", "summary", "blockers", "next", "reason"];
+  for (const key of keys) {
+    const value = event.payload[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      return value;
+    }
+  }
+  return JSON.stringify(event.payload);
+}
+function indentMultiline(value) {
+  return value.split(/\r?\n/).map((line) => `  ${line}`);
+}
+function followTargetForCommand(follow) {
+  return follow === "self" || follow === "user" ? "all" : follow;
+}
+function waitingForText(follow) {
+  if (follow === "user" || follow === "self") {
+    return "actionable workspace event";
+  }
+  return `directive or actionable event from ${follow}`;
+}
+function formatPollSeconds(value) {
+  return `${Number.isInteger(value) ? value : String(value)}s`;
 }
 
 // src/commands/doctor.ts
@@ -868,9 +1090,9 @@ async function runDoneCommand(ctx, options) {
         notice: [
           `Work report recorded as event ${event.id}.`,
           "Notify your follow target if the report changes their next step.",
-          `Run \`codework poll --workspace=${workspace.value} --name=${agent.name}\` before the next substantial step.`
+          `Run \`codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2\` before the next substantial step.`
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} done
 `,
@@ -914,7 +1136,7 @@ async function runGuideCommand(ctx) {
       unreadEvents: unread,
       allEvents: events,
       notice: ["Full guide reprinted for the calling agent."],
-      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
     }),
     quietText: `workspace=${workspace.value} agent=${agent.name} guide
 `,
@@ -996,7 +1218,7 @@ async function runJoinCommand(ctx, options) {
         unreadEvents: unread,
         allEvents,
         notice,
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `workspace=${workspace.value} agent=${agent.name} joined
 `,
@@ -1164,7 +1386,7 @@ async function runNewCommand(ctx, options) {
         `Agent registered: ${agent.name}.`,
         "This agent must keep using Codework commands for coordination."
       ],
-      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+      recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
     });
     return {
       text,
@@ -1185,49 +1407,146 @@ function requireNewOptions(options) {
 }
 
 // src/commands/poll.ts
-async function runPollCommand(ctx, options) {
+import process5 from "process";
+var sleep2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function runPollCommand(ctx, options, commandKind = "poll") {
   const workspace = slugifyIdentifier(ctx.workspace, "--workspace");
   const name = required(ctx.name, "--name");
-  const since = options.since === void 0 ? void 0 : parsePositiveInteger(options.since, "--since", 0);
-  const tail = options.tail === void 0 ? void 0 : parsePositiveInteger(options.tail, "--tail", 0);
+  const settings = normalizePollSettings(options);
+  const canonicalCommand = buildCanonicalPollCommand({
+    kind: commandKind,
+    workspace: workspace.value,
+    name,
+    waitSeconds: settings.waitSeconds,
+    intervalSeconds: settings.intervalSeconds
+  });
+  const nextPollCommand = buildCanonicalPollCommand({
+    kind: "poll",
+    workspace: workspace.value,
+    name,
+    waitSeconds: settings.waitSeconds,
+    intervalSeconds: settings.intervalSeconds
+  });
   const paths = resolveCodeworkPaths({
     cwd: ctx.cwd,
     home: ctx.home,
     workspace: workspace.value,
     debug: ctx.debug
   });
-  return withWorkspaceLock(paths.workspaceDir, async () => {
-    const state = await requireState(paths);
+  const startedAt = Date.now();
+  let readResult;
+  while (true) {
+    readResult = await readPollEvents(paths.workspaceDir, name, settings);
+    if (readResult.actionableEvents.length > 0 || settings.once || settings.waitSeconds === 0) {
+      break;
+    }
+    const remainingMs = startedAt + settings.waitSeconds * 1e3 - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep2(Math.min(settings.intervalSeconds * 1e3, remainingMs));
+  }
+  const finalResult = await finalizePoll(paths.workspaceDir, name, settings, canonicalCommand);
+  const pollResult = finalResult.actionableEvents.length > 0 ? "actionable-events-found" : "timeout-without-actionable-event";
+  return {
+    text: renderPollResult({
+      title: commandKind === "wait" ? "# CODEWORK WAIT RESULT" : "# CODEWORK POLL RESULT",
+      state: finalResult.state,
+      agent: finalResult.agent,
+      actionableEvents: finalResult.actionableEvents,
+      nonActionableEvents: finalResult.nonActionableEvents,
+      waitSeconds: settings.once ? 0 : settings.waitSeconds,
+      intervalSeconds: settings.intervalSeconds,
+      pollResult,
+      canonicalCommand,
+      nextPollCommand
+    }),
+    quietText: finalResult.actionableEvents.length === 0 ? `actionable=0 emptyPolls=${finalResult.agent.lastPollEmptyCount ?? 0}
+` : `actionable=${finalResult.actionableEvents.length}
+`,
+    json: {
+      ok: true,
+      command: commandKind,
+      workspace: finalResult.state.workspace,
+      agent: finalResult.agent,
+      pollResult,
+      waitSeconds: settings.waitSeconds,
+      intervalSeconds: settings.intervalSeconds,
+      actionableEvents: finalResult.actionableEvents,
+      nonActionableEvents: finalResult.nonActionableEvents,
+      cursorEventId: finalResult.agent.cursorEventId,
+      canonicalCommand
+    }
+  };
+}
+function normalizePollSettings(options) {
+  const waitSeconds = options.once ? 0 : parseBoundedSeconds({
+    cliValue: options.wait,
+    envValue: process5.env.CODEWORK_POLL_WAIT_SECONDS,
+    optionName: "--wait",
+    fallback: 30,
+    min: 0,
+    max: 120
+  });
+  const intervalSeconds = parseBoundedSeconds({
+    cliValue: options.interval,
+    envValue: process5.env.CODEWORK_POLL_INTERVAL_SECONDS,
+    optionName: "--interval",
+    fallback: 2,
+    min: 1,
+    max: 10
+  });
+  return {
+    waitSeconds,
+    intervalSeconds,
+    once: Boolean(options.once),
+    since: options.since === void 0 ? void 0 : parsePositiveInteger(options.since, "--since", 0),
+    tail: options.tail === void 0 ? void 0 : parsePositiveInteger(options.tail, "--tail", 0)
+  };
+}
+async function readPollEvents(workspaceDir, name, settings) {
+  return withWorkspaceLock(workspaceDir, async () => {
+    const state = await requireState({ workspaceDir, cwd: "", root: "", home: "" });
     const agent = findAgent(state, name);
     if (!agent) {
       throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
     }
-    const events = await readEvents(paths.workspaceDir);
-    const allUnread = relevantUnreadEvents(state, events, agent, since);
-    const unread = tail === void 0 ? allUnread : allUnread.slice(0, tail);
-    advanceCursorToLatest(state, agent);
-    await saveState(paths.workspaceDir, state);
-    return {
-      text: renderGuide({
-        state,
-        agentName: agent.name,
-        unreadEvents: unread,
-        allEvents: events,
-        notice: unread.length === 0 ? ["No unread events. Continue normal work, but keep polling before substantial changes."] : [`Unread events delivered: ${unread.length}. Cursor advanced to latest event.`],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
-      }),
-      quietText: unread.length === 0 ? "unread=0\n" : `unread=${unread.length}
-`,
-      json: {
-        ok: true,
-        command: "poll",
-        workspace: state.workspace,
-        agent,
-        unreadEvents: unread,
-        cursorEventId: agent.cursorEventId
-      }
-    };
+    const events = await readEvents(workspaceDir);
+    return buildPollReadResult(state, agent, events, settings);
   });
+}
+async function finalizePoll(workspaceDir, name, settings, canonicalCommand) {
+  return withWorkspaceLock(workspaceDir, async () => {
+    const state = await requireState({ workspaceDir, cwd: "", root: "", home: "" });
+    const agent = findAgent(state, name);
+    if (!agent) {
+      throw new CodeworkError(2, `Agent is not registered in workspace: ${name}`);
+    }
+    const events = await readEvents(workspaceDir);
+    const result = buildPollReadResult(state, agent, events, settings);
+    const maxDisplayedEventId = result.displayedEvents.reduce((max, event) => Math.max(max, event.id), 0);
+    agent.cursorEventId = maxDisplayedEventId > 0 ? maxDisplayedEventId : latestEventId(state);
+    agent.lastSeenAt = (/* @__PURE__ */ new Date()).toISOString();
+    agent.lastPollAt = agent.lastSeenAt;
+    agent.lastPollCommand = canonicalCommand;
+    agent.lastPollEmptyCount = result.actionableEvents.length > 0 ? 0 : (agent.lastPollEmptyCount ?? 0) + 1;
+    state.updatedAt = agent.lastSeenAt;
+    await saveState(workspaceDir, state);
+    return result;
+  });
+}
+function buildPollReadResult(state, agent, allEvents, settings) {
+  const unread = relevantUnreadEvents(state, allEvents, agent, settings.since);
+  const displayedEvents = settings.tail === void 0 ? unread : unread.slice(0, settings.tail);
+  const actionableEvents = displayedEvents.filter((event) => isActionableEvent(event, agent));
+  const nonActionableEvents = displayedEvents.filter((event) => !isActionableEvent(event, agent));
+  return {
+    state,
+    agent,
+    displayedEvents,
+    actionableEvents,
+    nonActionableEvents
+  };
 }
 
 // src/commands/say.ts
@@ -1275,7 +1594,7 @@ async function runSayCommand(ctx, options) {
           `Message recorded: kind=${kind}, to=${to}.`,
           kind === "directive" ? "Directive messages must be treated as strong coordination instructions by recipients." : kind === "blocker" ? "Blocker messages are visible to all agents." : "Message is available through Codework poll/status/log."
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} kind=${kind} to=${to}
 `,
@@ -1316,7 +1635,7 @@ async function runStatusCommand(ctx) {
       unreadEvents: unread,
       allEvents: events,
       notice,
-      recommendedCommand: agent ? `codework poll --workspace=${workspace.value} --name=${agent.name}` : `codework status --workspace=${workspace.value} --name=<agent>`,
+      recommendedCommand: agent ? `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2` : `codework status --workspace=${workspace.value} --name=<agent>`,
       statusMode: true
     }),
     quietText: `workspace=${workspace.value} agents=${Object.keys(state.agents).length}
@@ -1333,12 +1652,17 @@ async function runStatusCommand(ctx) {
   };
 }
 
+// src/commands/wait.ts
+async function runWaitCommand(ctx, options) {
+  return runPollCommand(ctx, options, "wait");
+}
+
 // src/cli.ts
 var defaultIo = {
-  stdout: (text) => process5.stdout.write(text),
-  stderr: (text) => process5.stderr.write(text)
+  stdout: (text) => process6.stdout.write(text),
+  stderr: (text) => process6.stderr.write(text)
 };
-async function main(argv = process5.argv, io = defaultIo) {
+async function main(argv = process6.argv, io = defaultIo) {
   const program = buildProgram(io);
   const parsedArgv = [argv[0] ?? "node", argv[1] ?? "codework", ...preprocessArgv(argv.slice(2))];
   try {
@@ -1392,8 +1716,11 @@ function buildProgram(io) {
       await emitResult(io, contextFrom(this), await runStatusCommand(contextFrom(this)));
     }
   );
-  addCommonOptions(program.command("poll").description("Read unread events for the calling agent.")).option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").action(async function() {
+  addCommonOptions(program.command("poll").description("Read unread events for the calling agent.")).option("--wait <seconds>", "Maximum seconds to wait for new actionable events.").option("--interval <seconds>", "Seconds between event log checks.").option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").option("--once", "Read once without waiting.").action(async function() {
     await emitResult(io, contextFrom(this), await runPollCommand(contextFrom(this), this.opts()));
+  });
+  addCommonOptions(program.command("wait").description("Wait for actionable events for the calling agent.")).option("--wait <seconds>", "Maximum seconds to wait for new actionable events.").option("--interval <seconds>", "Seconds between event log checks.").option("--since <eventId>", "Read events after this event id.").option("--tail <n>", "Limit unread events.").option("--once", "Read once without waiting.").action(async function() {
+    await emitResult(io, contextFrom(this), await runWaitCommand(contextFrom(this), this.opts()));
   });
   addCommonOptions(program.command("say").description("Post a message event to the workspace.")).option("--message <text>", "Message body.").option("--to <agent|all>", "Recipient.", "all").option("--kind <note|directive|question|blocker>", "Message kind.", "note").action(async function() {
     await emitResult(io, contextFrom(this), await runSayCommand(contextFrom(this), this.opts()));
@@ -1418,7 +1745,7 @@ function buildProgram(io) {
   return program;
 }
 function addCommonOptions(command, withDefaults = false) {
-  command.option("--workspace <id>", "Workspace id.").option("--name <agent>", "Calling agent name.").option("--format <format>", "text | json.", withDefaults ? "text" : void 0).option("--quiet", "Only print machine/minimal output.").option("--debug", "Print diagnostics to stderr.").option("--cwd <path>", "Repository/work root.", withDefaults ? process5.cwd() : void 0).option("--home <path>", "Override Codework home.").option("--no-color", "Do not emit ANSI color.");
+  command.option("--workspace <id>", "Workspace id.").option("--name <agent>", "Calling agent name.").option("--format <format>", "text | json.", withDefaults ? "text" : void 0).option("--quiet", "Only print machine/minimal output.").option("--debug", "Print diagnostics to stderr.").option("--cwd <path>", "Repository/work root.", withDefaults ? process6.cwd() : void 0).option("--home <path>", "Override Codework home.").option("--no-color", "Do not emit ANSI color.");
   return command;
 }
 function contextFrom(command) {
@@ -1434,7 +1761,7 @@ function contextFrom(command) {
     format: validateFormat(merged.format),
     quiet: Boolean(merged.quiet),
     debug: Boolean(merged.debug),
-    cwd: merged.cwd ?? process5.cwd(),
+    cwd: merged.cwd ?? process6.cwd(),
     home: merged.home
   };
 }
@@ -1487,10 +1814,10 @@ function requestedFormat(argv) {
 }
 if (isDirectRun()) {
   const code = await main();
-  process5.exit(code);
+  process6.exit(code);
 }
 function isDirectRun() {
-  const argvPath = process5.argv[1];
+  const argvPath = process6.argv[1];
   if (!argvPath) {
     return false;
   }

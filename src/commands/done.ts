@@ -60,9 +60,9 @@ export async function runDoneCommand(ctx: CommandContext, options: DoneCommandOp
         notice: [
           `Work report recorded as event ${event.id}.`,
           "Notify your follow target if the report changes their next step.",
-          `Run \`codework poll --workspace=${workspace.value} --name=${agent.name}\` before the next substantial step.`
+          `Run \`codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2\` before the next substantial step.`
         ],
-        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name}`
+        recommendedCommand: `codework poll --workspace=${workspace.value} --name=${agent.name} --wait=30 --interval=2`
       }),
       quietText: `event=${event.id} done\n`,
       json: {
