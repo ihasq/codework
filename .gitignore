@@ -1,0 +1,4 @@
+node_modules/
+.codework/
+coverage/
+.DS_Store

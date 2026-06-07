@@ -1,0 +1,8 @@
+{
+  "tasks": {
+    "codework": "deno run --allow-read --allow-write --allow-env --allow-run=git npm:codework",
+    "dev": "deno run --allow-read --allow-write --allow-env --allow-run=git src/cli.ts",
+    "doctor": "deno run --allow-read --allow-write --allow-env --allow-run=git src/cli.ts doctor"
+  },
+  "nodeModulesDir": "auto"
+}

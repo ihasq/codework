@@ -1,0 +1,34 @@
+{
+  "name": "codework",
+  "version": "0.1.0",
+  "description": "TypeScript CLI harness for coordinating multiple AI coding agents through stdout-as-context.",
+  "type": "module",
+  "bin": {
+    "codework": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md"
+  ],
+  "scripts": {
+    "build": "tsup src/cli.ts --format esm --target node20 --out-dir dist --clean",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:node": "npm run build && node dist/cli.js doctor",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.2",
+    "eslint": "10.4.1",
+    "tsup": "8.5.1",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.60.1",
+    "vitest": "4.1.8"
+  }
+}

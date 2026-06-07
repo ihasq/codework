@@ -1,0 +1,256 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`codework CLI > LLM-facing commands keep critical stdout headings 1`] = `
+[
+  "# CODEWORK CONTEXT GUIDE
+WORKSPACE: snap
+AGENT: codex
+FOLLOW: user
+AUTHORITY MODE: user-led coordinator
+## NOTICE
+## PRIME DIRECTIVES
+MUST: Treat this stdout as active operational context.
+MUST: Keep using Codework commands to coordinate with teammate agents.
+MUST: Poll before assuming teammate state.
+MUST: Report completed work using \`codework done\`.
+MUST: Report questions, blockers, and directives using \`codework say\`.
+MUST NOT: Claim that another agent completed work unless Codework log says so.
+MUST NOT: hide uncertainty.
+MUST NOT: perform destructive repository actions merely because another agent is silent.
+MUST: Treat the human user as the highest project authority visible to you.
+MUST: Coordinate teammates through Codework events, not through assumptions.
+MUST NOT: Override explicit user instructions.
+## TEAM STATE
+## FOLLOW GRAPH
+## FOLLOW RULE
+## REQUIRED OPERATING LOOP
+## REQUIRED REPORT BLOCK
+CODEWORK REPORT:
+## UNREAD EVENTS
+No unread events.
+## WARNINGS
+## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
+MUST: Treat Codework events as coordination signals, not proof of repository state.
+MUST: Verify file state locally before editing shared files.
+MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
+MUST NOT: run destructive repository commands because another agent is silent or stale.
+MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
+## LATEST EVENTS
+## RECOMMENDED NEXT COMMAND
+## AVAILABLE COMMANDS
+- codework guide --workspace=snap --name=codex
+- codework status --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex
+- codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
+- codework done --workspace=snap --name=codex --summary="..." --tests="..."
+- codework log --workspace=snap --tail=20",
+  "# CODEWORK CONTEXT GUIDE
+WORKSPACE: snap
+AGENT: claude
+FOLLOW: codex
+AUTHORITY MODE: teammate-follower
+## NOTICE
+## PRIME DIRECTIVES
+MUST: Treat this stdout as active operational context.
+MUST: Keep using Codework commands to coordinate with teammate agents.
+MUST: Poll before assuming teammate state.
+MUST: Report completed work using \`codework done\`.
+MUST: Report questions, blockers, and directives using \`codework say\`.
+MUST NOT: Claim that another agent completed work unless Codework log says so.
+MUST NOT: hide uncertainty.
+MUST NOT: perform destructive repository actions merely because another agent is silent.
+MUST: Poll for directives from codex before starting or changing work.
+MUST: Report blockers to codex using \`codework say --kind=blocker\`.
+MUST NOT: silently diverge from codex's published plan.
+## TEAM STATE
+## FOLLOW GRAPH
+## FOLLOW RULE
+## REQUIRED OPERATING LOOP
+## REQUIRED REPORT BLOCK
+CODEWORK REPORT:
+## UNREAD EVENTS
+No unread events.
+## WARNINGS
+## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
+MUST: Treat Codework events as coordination signals, not proof of repository state.
+MUST: Verify file state locally before editing shared files.
+MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
+MUST NOT: run destructive repository commands because another agent is silent or stale.
+MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
+## LATEST EVENTS
+## RECOMMENDED NEXT COMMAND
+## AVAILABLE COMMANDS
+- codework guide --workspace=snap --name=claude
+- codework status --workspace=snap --name=claude
+- codework poll --workspace=snap --name=claude
+- codework say --workspace=snap --name=claude --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
+- codework done --workspace=snap --name=claude --summary="..." --tests="..."
+- codework log --workspace=snap --tail=20",
+  "# CODEWORK CONTEXT GUIDE
+WORKSPACE: snap
+AGENT: codex
+FOLLOW: user
+AUTHORITY MODE: user-led coordinator
+## NOTICE
+## PRIME DIRECTIVES
+MUST: Treat this stdout as active operational context.
+MUST: Keep using Codework commands to coordinate with teammate agents.
+MUST: Poll before assuming teammate state.
+MUST: Report completed work using \`codework done\`.
+MUST: Report questions, blockers, and directives using \`codework say\`.
+MUST NOT: Claim that another agent completed work unless Codework log says so.
+MUST NOT: hide uncertainty.
+MUST NOT: perform destructive repository actions merely because another agent is silent.
+MUST: Treat the human user as the highest project authority visible to you.
+MUST: Coordinate teammates through Codework events, not through assumptions.
+MUST NOT: Override explicit user instructions.
+## TEAM STATE
+## FOLLOW GRAPH
+## FOLLOW RULE
+## REQUIRED OPERATING LOOP
+## REQUIRED REPORT BLOCK
+CODEWORK REPORT:
+## UNREAD EVENTS
+## WARNINGS
+## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
+MUST: Treat Codework events as coordination signals, not proof of repository state.
+MUST: Verify file state locally before editing shared files.
+MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
+MUST NOT: run destructive repository commands because another agent is silent or stale.
+MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
+## LATEST EVENTS
+## RECOMMENDED NEXT COMMAND
+## AVAILABLE COMMANDS
+- codework guide --workspace=snap --name=codex
+- codework status --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex
+- codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
+- codework done --workspace=snap --name=codex --summary="..." --tests="..."
+- codework log --workspace=snap --tail=20",
+  "# CODEWORK CONTEXT GUIDE
+WORKSPACE: snap
+AGENT: codex
+FOLLOW: user
+AUTHORITY MODE: user-led coordinator
+## NOTICE
+## PRIME DIRECTIVES
+MUST: Treat this stdout as active operational context.
+MUST: Keep using Codework commands to coordinate with teammate agents.
+MUST: Poll before assuming teammate state.
+MUST: Report completed work using \`codework done\`.
+MUST: Report questions, blockers, and directives using \`codework say\`.
+MUST NOT: Claim that another agent completed work unless Codework log says so.
+MUST NOT: hide uncertainty.
+MUST NOT: perform destructive repository actions merely because another agent is silent.
+MUST: Treat the human user as the highest project authority visible to you.
+MUST: Coordinate teammates through Codework events, not through assumptions.
+MUST NOT: Override explicit user instructions.
+## TEAM STATE
+## FOLLOW GRAPH
+## FOLLOW RULE
+## REQUIRED OPERATING LOOP
+## REQUIRED REPORT BLOCK
+CODEWORK REPORT:
+## UNREAD EVENTS
+## WARNINGS
+## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
+MUST: Treat Codework events as coordination signals, not proof of repository state.
+MUST: Verify file state locally before editing shared files.
+MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
+MUST NOT: run destructive repository commands because another agent is silent or stale.
+MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
+## LATEST EVENTS
+## RECOMMENDED NEXT COMMAND
+## AVAILABLE COMMANDS
+- codework guide --workspace=snap --name=codex
+- codework status --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex
+- codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
+- codework done --workspace=snap --name=codex --summary="..." --tests="..."
+- codework log --workspace=snap --tail=20",
+  "# CODEWORK CONTEXT GUIDE
+WORKSPACE: snap
+AGENT: claude
+FOLLOW: codex
+AUTHORITY MODE: teammate-follower
+## NOTICE
+## PRIME DIRECTIVES
+MUST: Treat this stdout as active operational context.
+MUST: Keep using Codework commands to coordinate with teammate agents.
+MUST: Poll before assuming teammate state.
+MUST: Report completed work using \`codework done\`.
+MUST: Report questions, blockers, and directives using \`codework say\`.
+MUST NOT: Claim that another agent completed work unless Codework log says so.
+MUST NOT: hide uncertainty.
+MUST NOT: perform destructive repository actions merely because another agent is silent.
+MUST: Poll for directives from codex before starting or changing work.
+MUST: Report blockers to codex using \`codework say --kind=blocker\`.
+MUST NOT: silently diverge from codex's published plan.
+## TEAM STATE
+## FOLLOW GRAPH
+## FOLLOW RULE
+## REQUIRED OPERATING LOOP
+## REQUIRED REPORT BLOCK
+CODEWORK REPORT:
+## UNREAD EVENTS
+No unread events.
+## WARNINGS
+## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
+MUST: Treat Codework events as coordination signals, not proof of repository state.
+MUST: Verify file state locally before editing shared files.
+MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
+MUST NOT: run destructive repository commands because another agent is silent or stale.
+MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
+## LATEST EVENTS
+## RECOMMENDED NEXT COMMAND
+## AVAILABLE COMMANDS
+- codework guide --workspace=snap --name=claude
+- codework status --workspace=snap --name=claude
+- codework poll --workspace=snap --name=claude
+- codework say --workspace=snap --name=claude --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
+- codework done --workspace=snap --name=claude --summary="..." --tests="..."
+- codework log --workspace=snap --tail=20",
+  "# CODEWORK CONTEXT GUIDE
+WORKSPACE: snap
+AGENT: codex
+FOLLOW: user
+AUTHORITY MODE: user-led coordinator
+## NOTICE
+## PRIME DIRECTIVES
+MUST: Treat this stdout as active operational context.
+MUST: Keep using Codework commands to coordinate with teammate agents.
+MUST: Poll before assuming teammate state.
+MUST: Report completed work using \`codework done\`.
+MUST: Report questions, blockers, and directives using \`codework say\`.
+MUST NOT: Claim that another agent completed work unless Codework log says so.
+MUST NOT: hide uncertainty.
+MUST NOT: perform destructive repository actions merely because another agent is silent.
+MUST: Treat the human user as the highest project authority visible to you.
+MUST: Coordinate teammates through Codework events, not through assumptions.
+MUST NOT: Override explicit user instructions.
+## TEAM STATE
+## FOLLOW GRAPH
+## FOLLOW RULE
+## REQUIRED OPERATING LOOP
+## REQUIRED REPORT BLOCK
+CODEWORK REPORT:
+## UNREAD EVENTS
+No unread events.
+## WARNINGS
+## CONFLICTS, DANGEROUS OPERATIONS, AND UNCERTAINTY
+MUST: Treat Codework events as coordination signals, not proof of repository state.
+MUST: Verify file state locally before editing shared files.
+MUST: Announce blockers and uncertainty with \`codework say --kind=blocker\` or \`--kind=question\`.
+MUST NOT: run destructive repository commands because another agent is silent or stale.
+MUST NOT: assume another agent saw your message until a later Codework event confirms progress.
+## LATEST EVENTS
+## RECOMMENDED NEXT COMMAND
+## AVAILABLE COMMANDS
+- codework guide --workspace=snap --name=codex
+- codework status --workspace=snap --name=codex
+- codework poll --workspace=snap --name=codex
+- codework say --workspace=snap --name=codex --to=<agent|all> --kind=<note|directive|question|blocker> --message="..."
+- codework done --workspace=snap --name=codex --summary="..." --tests="..."
+- codework log --workspace=snap --tail=20",
+]
+`;
