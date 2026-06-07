@@ -28,10 +28,10 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - uses: denoland/setup-deno@v3
+      - uses: denoland/setup-deno@v2.0.4
         with:
           deno-version: v2.x
-      - uses: oven-sh/setup-bun@v3
+      - uses: oven-sh/setup-bun@v2.2.0
         with:
           bun-version: latest
       - run: npm ci
