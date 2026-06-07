@@ -4,7 +4,7 @@
   "description": "TypeScript CLI harness for coordinating multiple AI coding agents through stdout-as-context.",
   "type": "module",
   "bin": {
-    "codework": "./dist/cli.js"
+    "codework": "dist/cli.js"
   },
   "files": [
     "dist",
